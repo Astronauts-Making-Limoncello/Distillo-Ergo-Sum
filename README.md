@@ -10,10 +10,18 @@ Final project for the **Advanced Machine Learning** exam, taught by Prof. **Fabi
 
 Create a Python<=3.7.* environment and install the required packages using the <code>requirements.txt</code> file.
 
-Note: the provided environment may not work properly on NVIDIA 30XX and up, since it installs old version of PyTorch.
+Note: the provided environment may not properly work with NVIDIA 30XX and up GPUs, since it installs a very old version of PyTorch.
 See utils/modern_NVIDIA_GPUs_env_fix.md for a dirty, yet effective fix.
 
 #### Data pre-processing
+
+COMING SOON
+
+#### Training
+
+COMING SOON
+
+#### Inference
 
 COMING SOON
 
