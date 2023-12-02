@@ -10,8 +10,10 @@ Final project for the **Advanced Machine Learning** exam, taught by Prof. **Fabi
 
 Create a Python<=3.7.* environment and install the required packages using the <code>requirements.txt</code> file.
 
-Note: the provided environment may not properly work with NVIDIA 30XX and up GPUs, since it installs a very old version of PyTorch.
-See utils/modern_NVIDIA_GPUs_env_fix.md for a dirty, yet effective fix.
+Please **note** that:
+-   if <code>SimpleITK</code> installation gets stuck during wheel creation, install it using <code>conda</code> rather than <code>pip</code> 
+-   the provided environment may result in instability or slow operations on NVIDIA 30XX and up GPUs, since it installs a very old version of PyTorch.
+See **<span style="color:red;">utils/modern_NVIDIA_GPUs_env_fix.md</span>** for a dirty, yet effective fix.
 
 #### Data pre-processing
 
