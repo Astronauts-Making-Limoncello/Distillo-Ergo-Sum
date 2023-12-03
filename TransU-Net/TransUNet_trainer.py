@@ -109,20 +109,27 @@ def _add_train_prog_bar_tasks(args: args, prog_bar: Progress, num_batches_train:
 
 def _train(
     args: args, prog_bar: Progress, device, model: torch.nn.Module, 
-    optimizer: optim.SGD, dataloader_train: DataLoader
+    optimizer: optim.SGD, dataloader_train: DataLoader, dataloader_val: DataLoader
 ):
 
-    num_batches_train = len(dataloader_train) * args.lim_num_batches_percent_train
-    if num_batches_train < 1:
+    num_batches_train = int(len(dataloader_train) * args.lim_num_batches_percent_train)
+    if num_batches_train == 0:
         num_batches_train = 1
+
+    num_batches_val = int(len(dataloader_val) * args.lim_num_batches_percent_val)
+    if num_batches_val == 0:
+        num_batches_val = 1
     
     prog_bar_epochs_task, prog_bar_train_batches_task = _add_train_prog_bar_tasks(args, prog_bar, num_batches_train)
+    prog_bar_val_batches_task, prog_bar_val_slices_task, prog_bar_val_metrics_task = _add_val_prog_bar_tasks(args, prog_bar, num_batches_val)
 
     ce_loss = CrossEntropyLoss()
     dice_loss = DiceLoss(args.num_classes)
 
     best_epoch_loss_ce_train = torch.inf
     best_epoch_loss_dice_train = torch.inf
+    best_epoch_metric_dice_val_mean_across_class = np.inf
+    best_epoch_metric_jaccard_val_mean_across_class = np.inf
 
     ### --- epoch --- ###
 
@@ -162,8 +169,8 @@ def _train(
         epoch_loss_ce_train = running_loss_ce_train / num_batches_train
         epoch_loss_dice_train = running_loss_dice_train / num_batches_train
 
-        epoch_loss_ce_train_is_best_str   = "    "
-        epoch_loss_dice_train_is_best_str = "    "
+        epoch_loss_ce_train_is_best_str   = "        "
+        epoch_loss_dice_train_is_best_str = "        "
         if epoch_loss_ce_train < best_epoch_loss_ce_train:
             best_epoch_loss_ce_train = epoch_loss_ce_train
             epoch_loss_ce_train_is_best_str = args.loss_is_best_str
@@ -177,19 +184,43 @@ def _train(
 
         ### --- validation step --- ###
 
+        epoch_metric_dice_val, epoch_metric_jaccard_val = _validate(
+            args, device, model, dataloader_val, num_batches_val,
+            prog_bar, prog_bar_val_batches_task, prog_bar_val_slices_task, prog_bar_val_metrics_task
+        )
+    
+        epoch_metric_dice_val_mean_across_class = np.mean(epoch_metric_dice_val, axis=0)
+        epoch_metric_jaccard_val_mean_across_class = np.mean(epoch_metric_jaccard_val, axis=0)
 
+        epoch_metric_jaccard_val_mean_across_class_is_best_str = "        "
+        epoch_metric_dice_val_mean_across_class_is_best_str    = "        "
+        if epoch_metric_jaccard_val_mean_across_class < best_epoch_metric_jaccard_val_mean_across_class:
+            epoch_metric_jaccard_val_mean_across_class_is_best_str = args.metric_is_best_str
+            best_epoch_metric_jaccard_val_mean_across_class = epoch_metric_jaccard_val_mean_across_class
+        if epoch_metric_dice_val_mean_across_class < best_epoch_metric_dice_val_mean_across_class:
+            epoch_metric_dice_val_mean_across_class_is_best_str = args.metric_is_best_str
+            best_epoch_metric_dice_val_mean_across_class = epoch_metric_dice_val_mean_across_class
 
         ### --- validation step --- ###
 
         ########################################################################
+        
+
+        print(
+            f"[b][{args.epochs_color}]{epoch:03d}[/{args.epochs_color}][/b] | train | "
+            f"Cross-Entropy [b][{args.train_batches_color}]{epoch_loss_ce_train.item():02.6f}[/{args.train_batches_color}][/b] {epoch_loss_ce_train_is_best_str}, "
+            f"Dice [b][{args.train_batches_color}]{epoch_loss_dice_train.item():02.6f}[/{args.train_batches_color}][/b] {epoch_loss_dice_train_is_best_str}"
+            f"\n"
+            f"    | val   | "
+            f"Jaccard       [b][{args.val_batches_color}]{epoch_metric_jaccard_val_mean_across_class:02.6f}[/{args.val_batches_color}][/b] {epoch_metric_jaccard_val_mean_across_class_is_best_str}, "
+            f"Dice [b][{args.val_batches_color}]{epoch_metric_dice_val_mean_across_class:02.6f}[/{args.val_batches_color}][/b] {epoch_metric_dice_val_mean_across_class_is_best_str}, "
+        )
+
+        if epoch + 1 != args.num_epochs:
+            print()
 
         prog_bar.update(task_id=prog_bar_epochs_task, total=args.num_epochs)
 
-        print(
-            f"[b][{args.epochs_color}]{epoch}[/{args.epochs_color}][/b] | train | "
-            f"ce [b][{args.train_batches_color}]{round(epoch_loss_ce_train.item(), args.ndigits)}[/{args.train_batches_color}][/b] {epoch_loss_ce_train_is_best_str}, "
-            f"dice [b][{args.train_batches_color}]{round(epoch_loss_dice_train.item(), args.ndigits)}[/{args.train_batches_color}][/b] {epoch_loss_dice_train_is_best_str}"
-        )
 
 
     ### --- epoch --- ###
@@ -201,18 +232,17 @@ def _train(
 
 ### --- validation --- ###
 
-def _validate(
-    args: args, prog_bar: Progress, device, model: torch.nn.Module,
-    dataloader_val: DataLoader
-):
-
-    num_batches_val = len(dataloader_val) * args.lim_num_batches_percent_val
-    if num_batches_val < 1:
-        num_batches_val = 1
-
+def _add_val_prog_bar_tasks(args: args, prog_bar: Progress, num_batches_val: int):
     prog_bar_val_batches_task = prog_bar.add_task(description=args.val_batches_task_descr, total=num_batches_val)
     prog_bar_val_slices_task = prog_bar.add_task(description=args.val_slices_task_descr, total=69)
     prog_bar_val_metrics_task = prog_bar.add_task(description=args.val_metrics_task_descr, total=args.num_classes)
+
+    return prog_bar_val_batches_task, prog_bar_val_slices_task, prog_bar_val_metrics_task
+
+def _validate(
+    args: args, device, model: torch.nn.Module, dataloader_val: DataLoader, num_batches_val: int,
+    prog_bar: Progress, prog_bar_val_batches_task, prog_bar_val_slices_task, prog_bar_val_metrics_task
+):
 
     # one list element --> one segmentation class
     running_metric_dice_val    = [0] * args.num_classes
@@ -270,6 +300,11 @@ def _validate(
         
         prog_bar.update(task_id=prog_bar_val_batches_task, advance=1)
 
+    epoch_metric_dice_val = np.array(running_metric_dice_val) / num_batches_val
+    epoch_metric_jaccard_val = np.array(running_metric_jaccard_val) / num_batches_val
+
+    return epoch_metric_dice_val, epoch_metric_jaccard_val
+
 ### --- validation --- ###
 
 ################################################################################
@@ -297,29 +332,26 @@ def main():
 
     # data
     dataset_train = _get_dataset_train(args)
-    print(f"Number of training slices: {len(dataset_train)}\n")
+    print(f"Total number of train slices      : {len(dataset_train)}")
 
     dataloader_train = _get_dataloader_train(args, dataset_train)
-    print(f"Number of train batches  : {len(dataloader_train)}\n")
+    print(f"Total number of train batches     : {len(dataloader_train)}")
+    print(f"Number of train batches limited to: {args.lim_num_batches_percent_train*100}%\n")
 
     dataset_val = _get_dataset_val(args)
-    print(f"Number of val cases (volumes): {len(dataset_val)}\n")
+    print(f"Total number of val cases (volumes): {len(dataset_val)}")
 
     dataloader_val = _get_dataloader_val(args, dataset_val)
-    print(f"Number of val batches        : {len(dataloader_val)}\n")
+    print(f"Total number of val batches        : {len(dataloader_val)}")
+    print(f"Number of val batches limited to   : {args.lim_num_batches_percent_val*100}%\n")
+
 
     # progress
     prog_bar = get_progress_bar()
     prog_bar.start()
 
-    # validation TEMP POSITION
-
-    _validate(args, prog_bar, device, model, dataloader_val)
-
-    exit()
-
     # training (includes validation!)
-    _train(args, prog_bar, device, model, optimizer, dataloader_train)
+    _train(args, prog_bar, device, model, optimizer, dataloader_train, dataloader_val)
 
 
 
