@@ -28,6 +28,12 @@ from rich.progress import *
 from torch.nn.modules.loss import CrossEntropyLoss
 from utils.DiceLoss import DiceLoss
 
+from scipy.ndimage import zoom
+
+import numpy as np
+
+from utils.Metrics import calculate_dice_metric_per_case, calculate_hausdorff_metric_per_case, calculate_jaccard_metric_per_case
+
 
 ### --- imports --- ###
 
@@ -77,6 +83,17 @@ def _get_dataloader_train(args: args, dataset_train: Synapse_dataset) -> DataLoa
         num_workers=args.num_workers, pin_memory=args.pin_memory
     )
 
+def _get_dataset_val(args: args) -> Synapse_dataset:
+    return Synapse_dataset(
+        base_dir=args.volume_path, list_dir=args.list_dir, split="val_vol"
+    )
+
+def _get_dataloader_val(args: args, dataset_val: Synapse_dataset) -> DataLoader:
+    return DataLoader(
+        dataset=dataset_val, batch_size=1, shuffle=True, 
+        num_workers=1, pin_memory=args.pin_memory
+    )
+
 ### --- data --- ###
 
 ################################################################################
@@ -95,7 +112,10 @@ def _train(
     optimizer: optim.SGD, dataloader_train: DataLoader
 ):
 
-    num_batches_train = len(dataloader_train)
+    num_batches_train = len(dataloader_train) * args.lim_num_batches_percent_train
+    if num_batches_train < 1:
+        num_batches_train = 1
+    
     prog_bar_epochs_task, prog_bar_train_batches_task = _add_train_prog_bar_tasks(args, prog_bar, num_batches_train)
 
     ce_loss = CrossEntropyLoss()
@@ -118,7 +138,7 @@ def _train(
 
         model.train()
 
-        for batch_train in dataloader_train:
+        for batch_train in list(dataloader_train)[:num_batches_train]:
 
             img_batch_train  = batch_train["image"].to(device)
             gt_batch_train   = batch_train["label"].to(device)
@@ -157,6 +177,8 @@ def _train(
 
         ### --- validation step --- ###
 
+
+
         ### --- validation step --- ###
 
         ########################################################################
@@ -174,6 +196,81 @@ def _train(
 
 
 ### --- training --- ###
+
+################################################################################
+
+### --- validation --- ###
+
+def _validate(
+    args: args, prog_bar: Progress, device, model: torch.nn.Module,
+    dataloader_val: DataLoader
+):
+
+    num_batches_val = len(dataloader_val) * args.lim_num_batches_percent_val
+    if num_batches_val < 1:
+        num_batches_val = 1
+
+    prog_bar_val_batches_task = prog_bar.add_task(description=args.val_batches_task_descr, total=num_batches_val)
+    prog_bar_val_slices_task = prog_bar.add_task(description=args.val_slices_task_descr, total=69)
+    prog_bar_val_metrics_task = prog_bar.add_task(description=args.val_metrics_task_descr, total=args.num_classes)
+
+    # one list element --> one segmentation class
+    running_metric_dice_val    = [0] * args.num_classes
+    running_metric_jaccard_val = [0] * args.num_classes
+    
+    model.eval()
+
+    for batch_val in list(dataloader_val)[: num_batches_val]:
+        
+        img_batch_val = batch_val["image"] 
+        label_batch_val = batch_val["label"]
+        
+        image = img_batch_val.squeeze(0).cpu().detach().numpy()
+        label = label_batch_val.squeeze(0).cpu().detach().numpy()
+        prediction = np.zeros_like(label)
+
+        num_slices = image.shape[0]
+
+        prog_bar.reset(task_id=prog_bar_val_slices_task, total=num_slices)
+        prog_bar.reset(task_id=prog_bar_val_metrics_task, total=args.num_classes)
+
+        for ind in range(num_slices):
+            slice = image[ind, :, :]
+
+            x, y = slice.shape[0], slice.shape[1]
+            
+            if x != args.img_size or y != args.img_size:
+                slice = zoom(slice, (args.img_size / x, args.img_size / y), order=3)
+
+            input = torch.from_numpy(slice).unsqueeze(0).unsqueeze(0).float().to(device)
+
+            with torch.no_grad():
+                outputs = model(input)
+
+                out = torch.argmax(torch.softmax(outputs, dim=1), dim=1).squeeze(0)
+                out = out.cpu().detach().numpy()
+
+                if x != args.img_size or y != args.img_size:
+                    pred = zoom(out, (x / args.img_size, y / args.img_size), order=0)
+                else:
+                    pred = out
+
+                prediction[ind] = pred
+
+            prog_bar.advance(task_id=prog_bar_val_slices_task, advance=1)
+        
+        for c in range(1, args.num_classes):
+
+            running_metric_dice_val[c]    += calculate_dice_metric_per_case(prediction == c, label == c)
+            running_metric_jaccard_val[c] += calculate_jaccard_metric_per_case(prediction == c, label == c)
+
+            prog_bar.advance(task_id=prog_bar_val_metrics_task, advance=1)
+
+
+        
+        prog_bar.update(task_id=prog_bar_val_batches_task, advance=1)
+
+### --- validation --- ###
 
 ################################################################################
 
@@ -203,11 +300,23 @@ def main():
     print(f"Number of training slices: {len(dataset_train)}\n")
 
     dataloader_train = _get_dataloader_train(args, dataset_train)
-    print(f"Number of train batches: {len(dataloader_train)}\n")
+    print(f"Number of train batches  : {len(dataloader_train)}\n")
+
+    dataset_val = _get_dataset_val(args)
+    print(f"Number of val cases (volumes): {len(dataset_val)}\n")
+
+    dataloader_val = _get_dataloader_val(args, dataset_val)
+    print(f"Number of val batches        : {len(dataloader_val)}\n")
 
     # progress
     prog_bar = get_progress_bar()
     prog_bar.start()
+
+    # validation TEMP POSITION
+
+    _validate(args, prog_bar, device, model, dataloader_val)
+
+    exit()
 
     # training (includes validation!)
     _train(args, prog_bar, device, model, optimizer, dataloader_train)
