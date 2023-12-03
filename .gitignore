@@ -163,3 +163,12 @@ cython_debug/
 
 *datasets*
 *lists*
+*data*
+
+# Visual Studio Code
+.vscode
+
+# Checkpoints
+
+References/*/model
+References/*/*/test_log/*
