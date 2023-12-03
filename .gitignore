@@ -172,3 +172,7 @@ cython_debug/
 
 References/*/model
 References/*/*/test_log/*
+
+# Arguments
+
+*_args.py
