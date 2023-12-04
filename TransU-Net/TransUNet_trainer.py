@@ -118,6 +118,23 @@ def _add_train_prog_bar_tasks(args: args, prog_bar: Progress, num_batches_train:
 
     return prog_bar_epochs_task, prog_bar_train_batches_task
 
+
+def _handle_train_metrics_update(
+        epoch_loss_ce_train  , best_epoch_loss_ce_train,
+        epoch_loss_dice_train, best_epoch_loss_dice_train
+):
+    train_ce_is_best, train_dice_is_best = False, False
+
+    if epoch_loss_ce_train < best_epoch_loss_ce_train:
+        best_epoch_loss_ce_train = epoch_loss_ce_train
+        train_ce_is_best = True
+    if epoch_loss_dice_train < best_epoch_loss_dice_train:
+        best_epoch_loss_dice_train = epoch_loss_dice_train
+        train_dice_is_best = True
+
+    return train_ce_is_best, train_dice_is_best
+
+
 def _train(
     args: args, prog_bar: Progress, device, model: torch.nn.Module, 
     optimizer: optim.SGD, dataloader_train: DataLoader, dataloader_val: DataLoader
@@ -183,14 +200,10 @@ def _train(
         epoch_loss_ce_train = running_loss_ce_train / num_batches_train
         epoch_loss_dice_train = running_loss_dice_train / num_batches_train
 
-        epoch_loss_ce_train_is_best_str   = "          "
-        epoch_loss_dice_train_is_best_str = "          "
-        if epoch_loss_ce_train < best_epoch_loss_ce_train:
-            best_epoch_loss_ce_train = epoch_loss_ce_train
-            epoch_loss_ce_train_is_best_str = args.loss_is_best_str
-        if epoch_loss_dice_train < best_epoch_loss_dice_train:
-            best_epoch_loss_dice_train = epoch_loss_dice_train
-            epoch_loss_dice_train_is_best_str = args.loss_is_best_str
+        train_ce_is_best, train_dice_is_best = _handle_train_metrics_update(
+            epoch_loss_ce_train, best_epoch_loss_ce_train,
+            epoch_loss_dice_train, best_epoch_loss_dice_train
+        )
 
         ### --- train step --- ###
         
@@ -202,18 +215,14 @@ def _train(
             args, device, model, dataloader_val, num_batches_val,
             prog_bar, prog_bar_val_batches_task, prog_bar_val_slices_task, prog_bar_val_metrics_task
         )
-    
+
         epoch_metric_dice_val_mean_across_class = np.mean(epoch_metric_dice_val, axis=0)
         epoch_metric_jaccard_val_mean_across_class = np.mean(epoch_metric_jaccard_val, axis=0)
 
-        epoch_metric_jaccard_val_mean_across_class_is_best_str = "          "
-        epoch_metric_dice_val_mean_across_class_is_best_str    = "          "
-        if epoch_metric_jaccard_val_mean_across_class > best_epoch_metric_jaccard_val_mean_across_class:
-            epoch_metric_jaccard_val_mean_across_class_is_best_str = args.metric_is_best_str
-            best_epoch_metric_jaccard_val_mean_across_class = epoch_metric_jaccard_val_mean_across_class
-        if epoch_metric_dice_val_mean_across_class > best_epoch_metric_dice_val_mean_across_class:
-            epoch_metric_dice_val_mean_across_class_is_best_str = args.metric_is_best_str
-            best_epoch_metric_dice_val_mean_across_class = epoch_metric_dice_val_mean_across_class
+        val_dice_is_best, val_jaccard_is_best = _handle_val_metrics_update(
+            epoch_metric_dice_val_mean_across_class, best_epoch_metric_dice_val_mean_across_class,
+            epoch_metric_jaccard_val_mean_across_class, best_epoch_metric_jaccard_val_mean_across_class
+        )
 
         ### --- validation step --- ###
 
@@ -222,12 +231,12 @@ def _train(
 
         print(
             f"[b][{args.epochs_color}]{epoch:03d}[/{args.epochs_color}][/b] | train | "
-            f"Cross-Entropy loss [b][{args.train_batches_color}]{epoch_loss_ce_train.item():02.6f}[/{args.train_batches_color}][/b] {epoch_loss_ce_train_is_best_str} | "
-            f"Dice loss   [b][{args.train_batches_color}]{epoch_loss_dice_train.item():02.6f}[/{args.train_batches_color}][/b] {epoch_loss_dice_train_is_best_str} |"
+            f"Cross-Entropy loss [b][{args.train_batches_color}]{epoch_loss_ce_train.item():02.6f}[/{args.train_batches_color}][/b] {args.loss_is_best_str if train_ce_is_best else args.loss_is_not_best_str} | "
+            f"Dice loss   [b][{args.train_batches_color}]{epoch_loss_dice_train.item():02.6f}[/{args.train_batches_color}][/b] {args.loss_is_best_str if train_dice_is_best else args.loss_is_not_best_str} |"
             f"\n"
             f"    | val   | "
-            f"Jaccard metric     [b][{args.val_batches_color}]{epoch_metric_jaccard_val_mean_across_class:02.6f}[/{args.val_batches_color}][/b] {epoch_metric_jaccard_val_mean_across_class_is_best_str} | "
-            f"Dice metric [b][{args.val_batches_color}]{epoch_metric_dice_val_mean_across_class:02.6f}[/{args.val_batches_color}][/b] {epoch_metric_dice_val_mean_across_class_is_best_str} |"
+            f"Jaccard metric     [b][{args.val_batches_color}]{epoch_metric_jaccard_val_mean_across_class:02.6f}[/{args.val_batches_color}][/b] {args.metric_is_best_str if val_jaccard_is_best else args.metric_is_not_best_str} | "
+            f"Dice metric [b][{args.val_batches_color}]{epoch_metric_dice_val_mean_across_class:02.6f}[/{args.val_batches_color}][/b] {args.metric_is_best_str if val_dice_is_best else args.metric_is_not_best_str} |"
         )
 
         if epoch + 1 != args.num_epochs:
@@ -252,6 +261,24 @@ def _add_val_prog_bar_tasks(args: args, prog_bar: Progress, num_batches_val: int
     prog_bar_val_metrics_task = prog_bar.add_task(description=args.val_metrics_task_descr, total=args.num_classes)
 
     return prog_bar_val_batches_task, prog_bar_val_slices_task, prog_bar_val_metrics_task
+
+
+def _handle_val_metrics_update(
+    epoch_metric_dice_val_mean_across_class   , best_epoch_metric_dice_val_mean_across_class,
+    epoch_metric_jaccard_val_mean_across_class, best_epoch_metric_jaccard_val_mean_across_class
+):
+
+    val_dice_is_best, val_jaccard_is_best = False, False
+    
+    if epoch_metric_dice_val_mean_across_class > best_epoch_metric_dice_val_mean_across_class:
+        best_epoch_metric_dice_val_mean_across_class = epoch_metric_dice_val_mean_across_class
+        val_dice_is_best = True
+
+    if epoch_metric_jaccard_val_mean_across_class > best_epoch_metric_jaccard_val_mean_across_class:
+        best_epoch_metric_jaccard_val_mean_across_class = epoch_metric_jaccard_val_mean_across_class
+        val_jaccard_is_best = True
+
+    return val_dice_is_best, val_jaccard_is_best
 
 def _validate(
     args: args, device, model: torch.nn.Module, dataloader_val: DataLoader, num_batches_val: int,
