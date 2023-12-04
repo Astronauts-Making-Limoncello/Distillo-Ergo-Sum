@@ -79,43 +79,10 @@ def _get_dataset(base_dir, list_dir, split, transform):
         base_dir=base_dir, list_dir=list_dir, split=split, transform=transform
     )
 
-def _get_dataset_train(args: args) -> Synapse_dataset:
-    
-    return Synapse_dataset(
-        base_dir=args.train_root_path, list_dir=args.list_dir, split="train",
-        transform=transforms.Compose(
-            [
-                RandomGenerator(output_size=[args.img_size, args.img_size])
-            ]
-        )
-    )
-
-def _get_dl_train(args: args, dataset_train: Synapse_dataset) -> DataLoader:
+def _get_dataloader(dataset, batch_size, shuffle, num_workers, pin_memory) -> DataLoader:
     return DataLoader(
-        dataset=dataset_train, batch_size=args.batch_size, shuffle=True, 
-        num_workers=args.num_workers, pin_memory=args.pin_memory
-    )
-
-def _get_dataset_val(args: args) -> Synapse_dataset:
-    return Synapse_dataset(
-        base_dir=args.val_volume_path, list_dir=args.list_dir, split="val_vol"
-    )
-
-def _get_dl_val(args: args, dataset_val: Synapse_dataset) -> DataLoader:
-    return DataLoader(
-        dataset=dataset_val, batch_size=1, shuffle=True, 
-        num_workers=1, pin_memory=args.pin_memory
-    )
-
-def _get_dataset_test(args: args) -> Synapse_dataset:
-    return Synapse_dataset(
-        base_dir=args.test_volume_path, list_dir=args.list_dir, split="test_vol"
-    )
-
-def _get_dl_test(args: args, dataset_test: Synapse_dataset) -> DataLoader:
-    return DataLoader(
-        dataset=dataset_test, batch_size=1, shuffle=True, 
-        num_workers=1, pin_memory=args.pin_memory
+        dataset=dataset, batch_size=batch_size, shuffle=shuffle, 
+        num_workers=num_workers, pin_memory=pin_memory
     )
 
 ### --- data --- ###
@@ -392,13 +359,12 @@ def main():
 
     # data
     ds_train = _get_dataset(base_dir=args.train_root_path, list_dir=args.list_dir, split="train", transform=args.train_transforms)
-    dl_train = _get_dl_train(args, ds_train)
+    dl_train = _get_dataloader(ds_train, args.batch_size, True, args.num_workers, pin_memory=args.pin_memory)
     ds_val = _get_dataset(base_dir=args.val_volume_path, list_dir=args.list_dir, split="val_vol", transform=args.val_transforms)
-    dl_val = _get_dl_val(args, ds_val)
+    dl_val = _get_dataloader(ds_val, 1, False, 1, True)
     ds_test = _get_dataset(base_dir=args.test_volume_path, list_dir=args.list_dir, split="test_vol", transform=args.test_transforms)
-    dl_test = _get_dl_test(args, ds_test)
+    dl_test = _get_dataloader(ds_test, 1, False, 1, True)
     print_data_summary(args, ds_train, dl_train, ds_val, dl_val, ds_test, dl_test)
-
 
     # progress
     prog_bar = get_progress_bar()
