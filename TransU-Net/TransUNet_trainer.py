@@ -122,22 +122,6 @@ def _add_train_prog_bar_tasks(args: args, prog_bar: Progress, num_batches_train:
     return prog_bar_epochs_task, prog_bar_train_batches_task
 
 
-def _handle_train_metrics_update(
-        epoch_loss_ce_train  , best_epoch_loss_ce_train,
-        epoch_loss_dice_train, best_epoch_loss_dice_train
-):
-    train_ce_is_best, train_dice_is_best = False, False
-
-    if epoch_loss_ce_train < best_epoch_loss_ce_train:
-        best_epoch_loss_ce_train = epoch_loss_ce_train
-        train_ce_is_best = True
-    if epoch_loss_dice_train < best_epoch_loss_dice_train:
-        best_epoch_loss_dice_train = epoch_loss_dice_train
-        train_dice_is_best = True
-
-    return train_ce_is_best, train_dice_is_best
-
-
 def _train(
     args: args, prog_bar: Progress, device, model: torch.nn.Module, 
     optimizer: optim.SGD, dataloader_train: DataLoader, dataloader_val: DataLoader
@@ -263,23 +247,6 @@ def _add_val_prog_bar_tasks(args: args, prog_bar: Progress, num_batches_val: int
 
     return prog_bar_val_batches_task, prog_bar_val_slices_task, prog_bar_val_metrics_task
 
-
-def _handle_val_metrics_update(
-    epoch_metric_dice_val_mean_across_class   , best_epoch_metric_dice_val_mean_across_class,
-    epoch_metric_jaccard_val_mean_across_class, best_epoch_metric_jaccard_val_mean_across_class
-):
-
-    val_dice_is_best, val_jaccard_is_best = False, False
-    
-    if epoch_metric_dice_val_mean_across_class > best_epoch_metric_dice_val_mean_across_class:
-        best_epoch_metric_dice_val_mean_across_class = epoch_metric_dice_val_mean_across_class
-        val_dice_is_best = True
-
-    if epoch_metric_jaccard_val_mean_across_class > best_epoch_metric_jaccard_val_mean_across_class:
-        best_epoch_metric_jaccard_val_mean_across_class = epoch_metric_jaccard_val_mean_across_class
-        val_jaccard_is_best = True
-
-    return val_dice_is_best, val_jaccard_is_best
 
 def _validate(
     args: args, device, model: torch.nn.Module, dataloader_val: DataLoader, num_batches_val: int,
