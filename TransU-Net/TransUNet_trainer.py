@@ -200,11 +200,6 @@ def _train(
         train_ce_is_best   = metric_has_improved(epoch_loss_ce_train  , best_epoch_loss_ce_train, "min")
         train_dice_is_best = metric_has_improved(epoch_loss_dice_train, best_epoch_loss_dice_train, "min")
 
-        # train_ce_is_best, train_dice_is_best = _handle_train_metrics_update(
-        #     epoch_loss_ce_train, best_epoch_loss_ce_train,
-        #     epoch_loss_dice_train, best_epoch_loss_dice_train
-        # )
-
         ### --- train step --- ###
         
         ########################################################################
