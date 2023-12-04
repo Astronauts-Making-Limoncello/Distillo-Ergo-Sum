@@ -259,8 +259,11 @@ def _validate(
 ):
 
     # one list element --> one segmentation class
-    running_metric_dice_val    = [0] * args.num_classes
-    running_metric_jaccard_val = [0] * args.num_classes
+    # NOTE about indexing!
+    # Paper excludes black class from segmentation metrics, so we index
+    # running_metric_{dice,jaccard}_val accordingly!
+    running_metric_dice_val    = [0] * args.num_classes_for_metrics
+    running_metric_jaccard_val = [0] * args.num_classes_for_metrics
     
     model.eval()
 
@@ -304,9 +307,12 @@ def _validate(
             prog_bar.advance(task_id=prog_bar_val_slices_task, advance=1)
         
         for c in range(1, args.num_classes):
-
-            running_metric_dice_val[c]    += calculate_dice_metric_per_case(prediction == c, label == c)
-            running_metric_jaccard_val[c] += calculate_jaccard_metric_per_case(prediction == c, label == c)
+            
+            # NOTE about indexing!
+            # Paper excludes black class from segmentation metrics, so we index
+            # running_metric_{dice,jaccard}_val accordingly!
+            running_metric_dice_val[c - 1]    += calculate_dice_metric_per_case(prediction == c, label == c)
+            running_metric_jaccard_val[c - 1] += calculate_jaccard_metric_per_case(prediction == c, label == c)
 
             prog_bar.advance(task_id=prog_bar_val_metrics_task, advance=1)
         prog_bar.update(task_id=prog_bar_val_metrics_task, total=args.num_classes)
