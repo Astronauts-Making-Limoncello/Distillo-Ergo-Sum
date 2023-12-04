@@ -206,8 +206,8 @@ def _train(
         epoch_metric_dice_val_mean_across_class = np.mean(epoch_metric_dice_val, axis=0)
         epoch_metric_jaccard_val_mean_across_class = np.mean(epoch_metric_jaccard_val, axis=0)
 
-        epoch_metric_jaccard_val_mean_across_class_is_best_str = "        "
-        epoch_metric_dice_val_mean_across_class_is_best_str    = "        "
+        epoch_metric_jaccard_val_mean_across_class_is_best_str = "          "
+        epoch_metric_dice_val_mean_across_class_is_best_str    = "          "
         if epoch_metric_jaccard_val_mean_across_class > best_epoch_metric_jaccard_val_mean_across_class:
             epoch_metric_jaccard_val_mean_across_class_is_best_str = args.metric_is_best_str
             best_epoch_metric_jaccard_val_mean_across_class = epoch_metric_jaccard_val_mean_across_class
@@ -222,12 +222,12 @@ def _train(
 
         print(
             f"[b][{args.epochs_color}]{epoch:03d}[/{args.epochs_color}][/b] | train | "
-            f"Cross-Entropy loss [b][{args.train_batches_color}]{epoch_loss_ce_train.item():02.6f}[/{args.train_batches_color}][/b] {epoch_loss_ce_train_is_best_str}, "
-            f"Dice loss   [b][{args.train_batches_color}]{epoch_loss_dice_train.item():02.6f}[/{args.train_batches_color}][/b] {epoch_loss_dice_train_is_best_str}"
+            f"Cross-Entropy loss [b][{args.train_batches_color}]{epoch_loss_ce_train.item():02.6f}[/{args.train_batches_color}][/b] {epoch_loss_ce_train_is_best_str} | "
+            f"Dice loss   [b][{args.train_batches_color}]{epoch_loss_dice_train.item():02.6f}[/{args.train_batches_color}][/b] {epoch_loss_dice_train_is_best_str} |"
             f"\n"
             f"    | val   | "
-            f"Jaccard metric     [b][{args.val_batches_color}]{epoch_metric_jaccard_val_mean_across_class:02.6f}[/{args.val_batches_color}][/b] {epoch_metric_jaccard_val_mean_across_class_is_best_str}, "
-            f"Dice metric [b][{args.val_batches_color}]{epoch_metric_dice_val_mean_across_class:02.6f}[/{args.val_batches_color}][/b] {epoch_metric_dice_val_mean_across_class_is_best_str}, "
+            f"Jaccard metric     [b][{args.val_batches_color}]{epoch_metric_jaccard_val_mean_across_class:02.6f}[/{args.val_batches_color}][/b] {epoch_metric_jaccard_val_mean_across_class_is_best_str} | "
+            f"Dice metric [b][{args.val_batches_color}]{epoch_metric_dice_val_mean_across_class:02.6f}[/{args.val_batches_color}][/b] {epoch_metric_dice_val_mean_across_class_is_best_str} |"
         )
 
         if epoch + 1 != args.num_epochs:
@@ -331,7 +331,7 @@ def _add_test_prog_bar_tasks(args: args, prog_bar: Progress, num_batches_test: i
 
     return prog_bar_test_batches_task, prog_bar_test_slices_task, prog_bar_test_metrics_task
 
-def _test(
+def _perform_testing(
     args: args, prog_bar: Progress, device, model: torch.nn.Module, dataloader_test: DataLoader
 ):
     
@@ -345,6 +345,33 @@ def _test(
         args, device, model, dataloader_test, num_batches_test, 
         prog_bar, prog_bar_test_batches_task, prog_bar_test_slices_task, prog_bar_test_metrics_task
     )
+
+def _test(args: args, prog_bar: Progress, device: torch.cuda.device, model: torch.nn.Module, dataloader_test: DataLoader):
+    best_epoch_metric_jaccard_test_mean_across_class = 0
+    best_epoch_metric_dice_test_mean_across_class = 0
+    epoch_metric_dice_test, epoch_metric_jaccard_test = _perform_testing(args, prog_bar, device, model, dataloader_test)
+    
+    epoch_metric_dice_test_mean_across_class = np.mean(epoch_metric_dice_test, axis=0)
+    epoch_metric_jaccard_test_mean_across_class = np.mean(epoch_metric_jaccard_test, axis=0)
+
+    epoch_metric_jaccard_test_mean_across_class_is_best_str = "          "
+    epoch_metric_dice_test_mean_across_class_is_best_str    = "          "
+    if epoch_metric_jaccard_test_mean_across_class > best_epoch_metric_jaccard_test_mean_across_class:
+        epoch_metric_jaccard_test_mean_across_class_is_best_str = args.metric_is_best_str
+        best_epoch_metric_jaccard_test_mean_across_class = epoch_metric_jaccard_test_mean_across_class
+    if epoch_metric_dice_test_mean_across_class > best_epoch_metric_dice_test_mean_across_class:
+        epoch_metric_dice_test_mean_across_class_is_best_str = args.metric_is_best_str
+        best_epoch_metric_dice_test_mean_across_class = epoch_metric_dice_test_mean_across_class
+
+    
+    print(
+        f"    | test  | "
+        f"Jaccard metric     [b][{args.test_batches_color}]{epoch_metric_jaccard_test_mean_across_class:02.6f}[/{args.test_batches_color}][/b] {epoch_metric_jaccard_test_mean_across_class_is_best_str} | "
+        f"Dice metric [b][{args.test_batches_color}]{epoch_metric_dice_test_mean_across_class:02.6f}[/{args.test_batches_color}][/b] {epoch_metric_dice_test_mean_across_class_is_best_str} |"
+    )
+
+    print()
+
 
 ### --- test --- ###
 
@@ -402,31 +429,10 @@ def main():
     _train(args, prog_bar, device, model, optimizer, dataloader_train, dataloader_val)
 
     # testing
+    _test(args, prog_bar, device, model, dataloader_test)
 
-    best_epoch_metric_jaccard_test_mean_across_class = 0
-    best_epoch_metric_dice_test_mean_across_class = 0
-    epoch_metric_dice_test, epoch_metric_jaccard_test = _test(args, prog_bar, device, model, dataloader_test)
-    
-    epoch_metric_dice_test_mean_across_class = np.mean(epoch_metric_dice_test, axis=0)
-    epoch_metric_jaccard_test_mean_across_class = np.mean(epoch_metric_jaccard_test, axis=0)
-
-    epoch_metric_jaccard_test_mean_across_class_is_best_str = "          "
-    epoch_metric_dice_test_mean_across_class_is_best_str    = "          "
-    if epoch_metric_jaccard_test_mean_across_class > best_epoch_metric_jaccard_test_mean_across_class:
-        epoch_metric_jaccard_test_mean_across_class_is_best_str = args.metric_is_best_str
-        best_epoch_metric_jaccard_test_mean_across_class = epoch_metric_jaccard_test_mean_across_class
-    if epoch_metric_dice_test_mean_across_class > best_epoch_metric_dice_test_mean_across_class:
-        epoch_metric_dice_test_mean_across_class_is_best_str = args.metric_is_best_str
-        best_epoch_metric_dice_test_mean_across_class = epoch_metric_dice_test_mean_across_class
 
     
-    print(
-        f"    | test  | "
-        f"Jaccard metric     [b][{args.test_batches_color}]{epoch_metric_jaccard_test_mean_across_class:02.6f}[/{args.test_batches_color}][/b] {epoch_metric_jaccard_test_mean_across_class_is_best_str}, "
-        f"Dice metric [b][{args.test_batches_color}]{epoch_metric_dice_test_mean_across_class:02.6f}[/{args.test_batches_color}][/b] {epoch_metric_dice_test_mean_across_class_is_best_str}, "
-    )
-
-    print()
 
 
 
