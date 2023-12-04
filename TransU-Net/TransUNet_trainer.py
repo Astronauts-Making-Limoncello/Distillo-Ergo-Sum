@@ -375,7 +375,6 @@ def _test(args: args, prog_bar: Progress, device: torch.cuda.device, model: torc
 def main():
 
     # args
-    # args = get_args()
     print(f"Arguments:")
     pprint(args.get_args())
     print()
