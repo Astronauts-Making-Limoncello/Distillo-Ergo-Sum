@@ -7,7 +7,12 @@ from rich.pretty import pprint
 
 import torch
 
-from utils.Prints import print_device_name, print_num_trainable_parameters
+from utils.Prints import print_device_name
+from utils.Prints import print_num_trainable_parameters
+from utils.Prints import print_data_summary
+from utils.Prints import print_end_of_epoch_summary
+from utils.Prints import print_end_of_test_summary
+
 from utils.Progress import get_progress_bar
 
 import TransUNet_args as args
@@ -69,6 +74,11 @@ def _init_model(args: args, device) -> ViT_seg:
 
 ### --- data --- ###
 
+def _get_dataset(base_dir, list_dir, split, transform):
+    return Synapse_dataset(
+        base_dir=base_dir, list_dir=list_dir, split=split, transform=transform
+    )
+
 def _get_dataset_train(args: args) -> Synapse_dataset:
     
     return Synapse_dataset(
@@ -80,7 +90,7 @@ def _get_dataset_train(args: args) -> Synapse_dataset:
         )
     )
 
-def _get_dataloader_train(args: args, dataset_train: Synapse_dataset) -> DataLoader:
+def _get_dl_train(args: args, dataset_train: Synapse_dataset) -> DataLoader:
     return DataLoader(
         dataset=dataset_train, batch_size=args.batch_size, shuffle=True, 
         num_workers=args.num_workers, pin_memory=args.pin_memory
@@ -91,7 +101,7 @@ def _get_dataset_val(args: args) -> Synapse_dataset:
         base_dir=args.val_volume_path, list_dir=args.list_dir, split="val_vol"
     )
 
-def _get_dataloader_val(args: args, dataset_val: Synapse_dataset) -> DataLoader:
+def _get_dl_val(args: args, dataset_val: Synapse_dataset) -> DataLoader:
     return DataLoader(
         dataset=dataset_val, batch_size=1, shuffle=True, 
         num_workers=1, pin_memory=args.pin_memory
@@ -102,7 +112,7 @@ def _get_dataset_test(args: args) -> Synapse_dataset:
         base_dir=args.test_volume_path, list_dir=args.list_dir, split="test_vol"
     )
 
-def _get_dataloader_test(args: args, dataset_test: Synapse_dataset) -> DataLoader:
+def _get_dl_test(args: args, dataset_test: Synapse_dataset) -> DataLoader:
     return DataLoader(
         dataset=dataset_test, batch_size=1, shuffle=True, 
         num_workers=1, pin_memory=args.pin_memory
@@ -124,14 +134,14 @@ def _add_train_prog_bar_tasks(args: args, prog_bar: Progress, num_batches_train:
 
 def _train(
     args: args, prog_bar: Progress, device, model: torch.nn.Module, 
-    optimizer: optim.SGD, dataloader_train: DataLoader, dataloader_val: DataLoader
+    optimizer: optim.SGD, dl_train: DataLoader, dl_val: DataLoader
 ):
 
-    num_batches_train = int(len(dataloader_train) * args.lim_num_batches_percent_train)
+    num_batches_train = int(len(dl_train) * args.lim_num_batches_percent_train)
     if num_batches_train == 0:
         num_batches_train = 1
 
-    num_batches_val = int(len(dataloader_val) * args.lim_num_batches_percent_val)
+    num_batches_val = int(len(dl_val) * args.lim_num_batches_percent_val)
     if num_batches_val == 0:
         num_batches_val = 1
     
@@ -163,7 +173,7 @@ def _train(
 
         model.train()
 
-        for batch_train in list(dataloader_train)[:num_batches_train]:
+        for batch_train in list(dl_train)[:num_batches_train]:
 
             img_batch_train  = batch_train["image"].to(device)
             gt_batch_train   = batch_train["label"].to(device)
@@ -202,7 +212,7 @@ def _train(
         ### --- validation step --- ###
 
         epoch_metric_dice_val, epoch_metric_jaccard_val = _validate(
-            args, device, model, dataloader_val, num_batches_val,
+            args, device, model, dl_val, num_batches_val,
             prog_bar, prog_bar_val_batches_task, prog_bar_val_slices_task, prog_bar_val_metrics_task
         )
 
@@ -212,20 +222,14 @@ def _train(
         ### --- validation step --- ###
 
         ########################################################################
-        
 
-        print(
-            f"[b][{args.epochs_color}]{epoch:03d}[/{args.epochs_color}][/b] | train | "
-            f"Cross-Entropy loss [b][{args.train_batches_color}]{epoch_loss_ce_train.item():02.6f}[/{args.train_batches_color}][/b] {args.loss_is_best_str if train_ce_is_best else args.loss_is_not_best_str} | "
-            f"Dice loss   [b][{args.train_batches_color}]{epoch_loss_dice_train.item():02.6f}[/{args.train_batches_color}][/b] {args.loss_is_best_str if train_dice_is_best else args.loss_is_not_best_str} |"
-            f"\n"
-            f"    | val   | "
-            f"Jaccard metric     [b][{args.val_batches_color}]{epoch_metric_jaccard_val:02.6f}[/{args.val_batches_color}][/b] {args.metric_is_best_str if val_jaccard_is_best else args.metric_is_not_best_str} | "
-            f"Dice metric [b][{args.val_batches_color}]{epoch_metric_dice_val:02.6f}[/{args.val_batches_color}][/b] {args.metric_is_best_str if val_dice_is_best else args.metric_is_not_best_str} |"
+        print_end_of_epoch_summary(
+            args, epoch,
+            epoch_loss_ce_train, train_ce_is_best,
+            epoch_loss_dice_train, train_dice_is_best,
+            epoch_metric_jaccard_val, val_jaccard_is_best,
+            epoch_metric_dice_val, val_dice_is_best
         )
-
-        if epoch + 1 != args.num_epochs:
-            print()
 
         prog_bar.update(task_id=prog_bar_epochs_task, total=args.num_epochs)
 
@@ -249,7 +253,7 @@ def _add_val_prog_bar_tasks(args: args, prog_bar: Progress, num_batches_val: int
 
 
 def _validate(
-    args: args, device, model: torch.nn.Module, dataloader_val: DataLoader, num_batches_val: int,
+    args: args, device, model: torch.nn.Module, dl_val: DataLoader, num_batches_val: int,
     prog_bar: Progress, prog_bar_val_batches_task, prog_bar_val_slices_task, prog_bar_val_metrics_task
 ):
 
@@ -262,7 +266,7 @@ def _validate(
     
     model.eval()
 
-    for batch_val in list(dataloader_val)[: num_batches_val]:
+    for batch_val in list(dl_val)[: num_batches_val]:
         
         img_batch_val = batch_val["image"] 
         label_batch_val = batch_val["label"]
@@ -337,36 +341,34 @@ def _add_test_prog_bar_tasks(args: args, prog_bar: Progress, num_batches_test: i
     return prog_bar_test_batches_task, prog_bar_test_slices_task, prog_bar_test_metrics_task
 
 def _perform_testing(
-    args: args, prog_bar: Progress, device, model: torch.nn.Module, dataloader_test: DataLoader
+    args: args, prog_bar: Progress, device, model: torch.nn.Module, dl_test: DataLoader
 ):
     
-    num_batches_test = int(len(dataloader_test) * args.lim_num_batches_percent_test)
+    num_batches_test = int(len(dl_test) * args.lim_num_batches_percent_test)
     if num_batches_test == 0:
         num_batches_test = 1
 
     prog_bar_test_batches_task, prog_bar_test_slices_task, prog_bar_test_metrics_task = _add_test_prog_bar_tasks(args, prog_bar, num_batches_test)
     
     return _validate(
-        args, device, model, dataloader_test, num_batches_test, 
+        args, device, model, dl_test, num_batches_test, 
         prog_bar, prog_bar_test_batches_task, prog_bar_test_slices_task, prog_bar_test_metrics_task
     )
 
-def _test(args: args, prog_bar: Progress, device: torch.cuda.device, model: torch.nn.Module, dataloader_test: DataLoader):
+def _test(args: args, prog_bar: Progress, device: torch.cuda.device, model: torch.nn.Module, dl_test: DataLoader):
     best_epoch_metric_jaccard_test = 0
     best_epoch_metric_dice_test = 0
     
-    epoch_metric_dice_test, epoch_metric_jaccard_test = _perform_testing(args, prog_bar, device, model, dataloader_test)
+    epoch_metric_dice_test, epoch_metric_jaccard_test = _perform_testing(args, prog_bar, device, model, dl_test)
 
     test_dice_is_best    = metric_has_improved(epoch_metric_dice_test   , best_epoch_metric_dice_test, "max")
     test_jaccard_is_best = metric_has_improved(epoch_metric_jaccard_test, best_epoch_metric_jaccard_test, "max")
     
-    print(
-        f"    | test  | "
-        f"Jaccard metric     [b][{args.test_batches_color}]{epoch_metric_jaccard_test:02.6f}[/{args.test_batches_color}][/b] {args.metric_is_best_str if test_jaccard_is_best else args.metric_is_not_best_str} | "
-        f"Dice metric [b][{args.test_batches_color}]{epoch_metric_dice_test:02.6f}[/{args.test_batches_color}][/b] {args.metric_is_best_str if test_dice_is_best else args.metric_is_not_best_str} |"
+    print_end_of_test_summary(
+        args, 
+        epoch_metric_jaccard_test, test_jaccard_is_best,
+        epoch_metric_dice_test, test_dice_is_best
     )
-
-    print()
 
 
 ### --- test --- ###
@@ -395,26 +397,13 @@ def main():
     )
 
     # data
-    dataset_train = _get_dataset_train(args)
-    print(f"Total number of train slices      : {len(dataset_train)}")
-
-    dataloader_train = _get_dataloader_train(args, dataset_train)
-    print(f"Total number of train batches     : {len(dataloader_train)}")
-    print(f"Number of train batches limited to: {args.lim_num_batches_percent_train*100}%\n")
-
-    dataset_val = _get_dataset_val(args)
-    print(f"Total number of val cases (volumes): {len(dataset_val)}")
-
-    dataloader_val = _get_dataloader_val(args, dataset_val)
-    print(f"Total number of val batches        : {len(dataloader_val)}")
-    print(f"Number of val batches limited to   : {args.lim_num_batches_percent_val*100}%\n")
-    
-    dataset_test = _get_dataset_test(args)
-    print(f"Total number of test cases (volumes): {len(dataset_test)}")
-
-    dataloader_test = _get_dataloader_test(args, dataset_test)
-    print(f"Total number of test batches        : {len(dataloader_test)}")
-    print(f"Number of test batches limited to   : {args.lim_num_batches_percent_test*100}%\n")
+    ds_train = _get_dataset(base_dir=args.train_root_path, list_dir=args.list_dir, split="train", transform=args.train_transforms)
+    dl_train = _get_dl_train(args, ds_train)
+    ds_val = _get_dataset(base_dir=args.val_volume_path, list_dir=args.list_dir, split="val_vol", transform=args.val_transforms)
+    dl_val = _get_dl_val(args, ds_val)
+    ds_test = _get_dataset(base_dir=args.test_volume_path, list_dir=args.list_dir, split="test_vol", transform=args.test_transforms)
+    dl_test = _get_dl_test(args, ds_test)
+    print_data_summary(args, ds_train, dl_train, ds_val, dl_val, ds_test, dl_test)
 
 
     # progress
@@ -422,10 +411,10 @@ def main():
     prog_bar.start()
 
     # training (and validation!)
-    _train(args, prog_bar, device, model, optimizer, dataloader_train, dataloader_val)
+    _train(args, prog_bar, device, model, optimizer, dl_train, dl_val)
 
     # testing
-    _test(args, prog_bar, device, model, dataloader_test)
+    _test(args, prog_bar, device, model, dl_test)
 
 
     
