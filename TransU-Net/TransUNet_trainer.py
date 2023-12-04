@@ -32,7 +32,10 @@ from scipy.ndimage import zoom
 
 import numpy as np
 
-from utils.Metrics import calculate_dice_metric_per_case, calculate_hausdorff_metric_per_case, calculate_jaccard_metric_per_case
+from utils.Metrics import calculate_dice_metric_per_case
+from utils.Metrics import calculate_hausdorff_metric_per_case
+from utils.Metrics import calculate_jaccard_metric_per_case
+from utils.Metrics import metric_has_improved
 
 
 ### --- imports --- ###
@@ -156,8 +159,8 @@ def _train(
 
     best_epoch_loss_ce_train = torch.inf
     best_epoch_loss_dice_train = torch.inf
-    best_epoch_metric_dice_val_mean_across_class = 0
-    best_epoch_metric_jaccard_val_mean_across_class = 0
+    best_epoch_metric_dice_val = 0
+    best_epoch_metric_jaccard_val = 0
 
     ### --- epoch --- ###
 
@@ -200,10 +203,13 @@ def _train(
         epoch_loss_ce_train = running_loss_ce_train / num_batches_train
         epoch_loss_dice_train = running_loss_dice_train / num_batches_train
 
-        train_ce_is_best, train_dice_is_best = _handle_train_metrics_update(
-            epoch_loss_ce_train, best_epoch_loss_ce_train,
-            epoch_loss_dice_train, best_epoch_loss_dice_train
-        )
+        train_ce_is_best   = metric_has_improved(epoch_loss_ce_train  , best_epoch_loss_ce_train, "min")
+        train_dice_is_best = metric_has_improved(epoch_loss_dice_train, best_epoch_loss_dice_train, "min")
+
+        # train_ce_is_best, train_dice_is_best = _handle_train_metrics_update(
+        #     epoch_loss_ce_train, best_epoch_loss_ce_train,
+        #     epoch_loss_dice_train, best_epoch_loss_dice_train
+        # )
 
         ### --- train step --- ###
         
@@ -216,13 +222,8 @@ def _train(
             prog_bar, prog_bar_val_batches_task, prog_bar_val_slices_task, prog_bar_val_metrics_task
         )
 
-        epoch_metric_dice_val_mean_across_class = np.mean(epoch_metric_dice_val, axis=0)
-        epoch_metric_jaccard_val_mean_across_class = np.mean(epoch_metric_jaccard_val, axis=0)
-
-        val_dice_is_best, val_jaccard_is_best = _handle_val_metrics_update(
-            epoch_metric_dice_val_mean_across_class, best_epoch_metric_dice_val_mean_across_class,
-            epoch_metric_jaccard_val_mean_across_class, best_epoch_metric_jaccard_val_mean_across_class
-        )
+        val_dice_is_best    = metric_has_improved(epoch_metric_dice_val   , best_epoch_metric_dice_val, "max")
+        val_jaccard_is_best = metric_has_improved(epoch_metric_jaccard_val, best_epoch_metric_jaccard_val, "max")
 
         ### --- validation step --- ###
 
@@ -235,8 +236,8 @@ def _train(
             f"Dice loss   [b][{args.train_batches_color}]{epoch_loss_dice_train.item():02.6f}[/{args.train_batches_color}][/b] {args.loss_is_best_str if train_dice_is_best else args.loss_is_not_best_str} |"
             f"\n"
             f"    | val   | "
-            f"Jaccard metric     [b][{args.val_batches_color}]{epoch_metric_jaccard_val_mean_across_class:02.6f}[/{args.val_batches_color}][/b] {args.metric_is_best_str if val_jaccard_is_best else args.metric_is_not_best_str} | "
-            f"Dice metric [b][{args.val_batches_color}]{epoch_metric_dice_val_mean_across_class:02.6f}[/{args.val_batches_color}][/b] {args.metric_is_best_str if val_dice_is_best else args.metric_is_not_best_str} |"
+            f"Jaccard metric     [b][{args.val_batches_color}]{epoch_metric_jaccard_val:02.6f}[/{args.val_batches_color}][/b] {args.metric_is_best_str if val_jaccard_is_best else args.metric_is_not_best_str} | "
+            f"Dice metric [b][{args.val_batches_color}]{epoch_metric_dice_val:02.6f}[/{args.val_batches_color}][/b] {args.metric_is_best_str if val_dice_is_best else args.metric_is_not_best_str} |"
         )
 
         if epoch + 1 != args.num_epochs:
@@ -342,12 +343,15 @@ def _validate(
             running_metric_jaccard_val[c - 1] += calculate_jaccard_metric_per_case(prediction == c, label == c)
 
             prog_bar.advance(task_id=prog_bar_val_metrics_task, advance=1)
-        prog_bar.update(task_id=prog_bar_val_metrics_task, total=args.num_classes)
+        prog_bar.update(task_id=prog_bar_val_metrics_task, total=args.num_classes_for_metrics)
 
         prog_bar.update(task_id=prog_bar_val_batches_task, advance=1)
 
     epoch_metric_dice_val = np.array(running_metric_dice_val) / num_batches_val
     epoch_metric_jaccard_val = np.array(running_metric_jaccard_val) / num_batches_val
+
+    epoch_metric_dice_val = np.mean(epoch_metric_dice_val, axis=0)
+    epoch_metric_jaccard_val = np.mean(epoch_metric_jaccard_val, axis=0)
 
     return epoch_metric_dice_val, epoch_metric_jaccard_val
 
@@ -380,27 +384,18 @@ def _perform_testing(
     )
 
 def _test(args: args, prog_bar: Progress, device: torch.cuda.device, model: torch.nn.Module, dataloader_test: DataLoader):
-    best_epoch_metric_jaccard_test_mean_across_class = 0
-    best_epoch_metric_dice_test_mean_across_class = 0
-    epoch_metric_dice_test, epoch_metric_jaccard_test = _perform_testing(args, prog_bar, device, model, dataloader_test)
+    best_epoch_metric_jaccard_test = 0
+    best_epoch_metric_dice_test = 0
     
-    epoch_metric_dice_test_mean_across_class = np.mean(epoch_metric_dice_test, axis=0)
-    epoch_metric_jaccard_test_mean_across_class = np.mean(epoch_metric_jaccard_test, axis=0)
+    epoch_metric_dice_test, epoch_metric_jaccard_test = _perform_testing(args, prog_bar, device, model, dataloader_test)
 
-    epoch_metric_jaccard_test_mean_across_class_is_best_str = "          "
-    epoch_metric_dice_test_mean_across_class_is_best_str    = "          "
-    if epoch_metric_jaccard_test_mean_across_class > best_epoch_metric_jaccard_test_mean_across_class:
-        epoch_metric_jaccard_test_mean_across_class_is_best_str = args.metric_is_best_str
-        best_epoch_metric_jaccard_test_mean_across_class = epoch_metric_jaccard_test_mean_across_class
-    if epoch_metric_dice_test_mean_across_class > best_epoch_metric_dice_test_mean_across_class:
-        epoch_metric_dice_test_mean_across_class_is_best_str = args.metric_is_best_str
-        best_epoch_metric_dice_test_mean_across_class = epoch_metric_dice_test_mean_across_class
-
+    test_dice_is_best    = metric_has_improved(epoch_metric_dice_test   , best_epoch_metric_dice_test, "max")
+    test_jaccard_is_best = metric_has_improved(epoch_metric_jaccard_test, best_epoch_metric_jaccard_test, "max")
     
     print(
         f"    | test  | "
-        f"Jaccard metric     [b][{args.test_batches_color}]{epoch_metric_jaccard_test_mean_across_class:02.6f}[/{args.test_batches_color}][/b] {epoch_metric_jaccard_test_mean_across_class_is_best_str} | "
-        f"Dice metric [b][{args.test_batches_color}]{epoch_metric_dice_test_mean_across_class:02.6f}[/{args.test_batches_color}][/b] {epoch_metric_dice_test_mean_across_class_is_best_str} |"
+        f"Jaccard metric     [b][{args.test_batches_color}]{epoch_metric_jaccard_test:02.6f}[/{args.test_batches_color}][/b] {args.metric_is_best_str if test_jaccard_is_best else args.metric_is_not_best_str} | "
+        f"Dice metric [b][{args.test_batches_color}]{epoch_metric_dice_test:02.6f}[/{args.test_batches_color}][/b] {args.metric_is_best_str if test_dice_is_best else args.metric_is_not_best_str} |"
     )
 
     print()

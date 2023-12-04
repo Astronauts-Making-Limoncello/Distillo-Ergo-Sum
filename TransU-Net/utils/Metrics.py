@@ -69,3 +69,20 @@ def calculate_dice_hausdorff_jaccard_metrics_per_case(pred, gt):
     
     else:
         return 0, 0, 0
+    
+def metric_has_improved(metric, metric_best, lt_or_gt: str):
+    is_best = False
+
+    if lt_or_gt == "min":
+        if metric < metric_best:
+            metric_best = metric
+            is_best = True
+    elif lt_or_gt == "max":
+        if metric > metric_best:
+            metric_best = metric
+            is_best = True
+
+    else:
+        raise ValueError(f"lt_or_gt should be either \"min\" or \"max\", got {lt_or_gt} instead")
+
+    return is_best
