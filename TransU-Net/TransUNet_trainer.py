@@ -317,6 +317,7 @@ def _validate(
     epoch_metric_dice_val = np.array(running_metric_dice_val) / num_batches_val
     epoch_metric_jaccard_val = np.array(running_metric_jaccard_val) / num_batches_val
 
+    # averaging across segmentation classes
     epoch_metric_dice_val = np.mean(epoch_metric_dice_val, axis=0)
     epoch_metric_jaccard_val = np.mean(epoch_metric_jaccard_val, axis=0)
 
