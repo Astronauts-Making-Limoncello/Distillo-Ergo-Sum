@@ -180,10 +180,9 @@ def _train(
 
         wb_run.log(
             {
-                "epoch": epoch,
-                "loss/train": epoch_loss_train,
-                "loss_ce/train": epoch_loss_ce_train,
-                "loss_dice/train": epoch_loss_dice_train,
+                "loss/full/train": epoch_loss_train,
+                "loss/ce/train": epoch_loss_ce_train,
+                "loss/dice/train": epoch_loss_dice_train,
             }
         )
 
@@ -330,9 +329,9 @@ def _validate(
 
     wb_run.log(
         {
-            "epoch": epoch,
-            f"metric_dice/{inference_type}": epoch_metric_dice_val,
-            f"metric_jaccard/{inference_type}": epoch_metric_jaccard_val
+            f"loss/dice/{inference_type}": 1 - epoch_metric_dice_val,
+            f"metric/dice/{inference_type}": epoch_metric_dice_val,
+            f"metric/jaccard/{inference_type}": epoch_metric_jaccard_val
         }
     )
 
