@@ -27,13 +27,13 @@ prog_bar = utils.get_progress_bar()
 prog_bar.start()
 
 def get_trainloader():
-    return utils.get_dataset_train(batch_size=batch_size, num_workers=1, pin_memory=True)
+    return utils.get_dataset_train(args.train_root_path, args.list_dir, "train", batch_size=batch_size, num_workers=1, pin_memory=True)
 
 def get_validationloader():
-    return utils.get_dataset_validation(batch_size=1, num_workers=1, pin_memory=True)
+    return utils.get_dataset_validation(args.val_volume_path, args.list_dir, "val_vol", batch_size=1, num_workers=1, pin_memory=True)
 
 def get_testloader():
-    return utils.get_dataset_test(batch_size=1, num_workers=1, pin_memory=True)
+    return utils.get_dataset_test(args.test_volume_path, args.list_dir, "test_vol", batch_size=1, num_workers=1, pin_memory=True)
 
 def init_model():
     model = SqueezeUNet(num_classes=num_classes)
