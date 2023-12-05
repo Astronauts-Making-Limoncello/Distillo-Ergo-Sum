@@ -47,7 +47,7 @@ import os
 from utils.Model import get_num_trainable_parameters
 
 import wandb
-from wandb import wandb_run
+from wandb.wandb_run import Run
 
 from utils.Checkpointing import save_ckpt
 
@@ -110,7 +110,7 @@ def _add_train_prog_bar_tasks(args: args, prog_bar: Progress, num_batches_train:
 def _train(
     args: args, prog_bar: Progress, device, model: torch.nn.Module, 
     optimizer: optim.SGD, dl_train: DataLoader, dl_val: DataLoader,
-    wb_run: wandb_run
+    wb_run: Run
 ):
     
     os.makedirs(args.checkpoint_dir) if not os.path.exists(args.checkpoint_dir) else None
@@ -254,7 +254,7 @@ def _add_val_prog_bar_tasks(args: args, prog_bar: Progress, num_batches_val: int
 def _validate(
     inference_type: str, epoch: int, args: args, device, model: torch.nn.Module, dl_val: DataLoader, num_batches_val: int,
     prog_bar: Progress, prog_bar_val_batches_task, prog_bar_val_slices_task, prog_bar_val_metrics_task,
-    wb_run: wandb_run
+    wb_run: Run
 ):
     
     if inference_type not in args.INFERENCE_TYPES:
@@ -353,7 +353,7 @@ def _add_test_prog_bar_tasks(args: args, prog_bar: Progress, num_batches_test: i
 
 def _perform_testing(
     args: args, prog_bar: Progress, device, model: torch.nn.Module, dl_test: DataLoader,
-    wb_run: wandb_run
+    wb_run: Run
 ):
     
     num_batches_test = int(len(dl_test) * args.lim_num_batches_percent_test)
@@ -368,7 +368,7 @@ def _perform_testing(
         wb_run
     )
 
-def _test(args: args, prog_bar: Progress, device: torch.cuda.device, model: torch.nn.Module, dl_test: DataLoader, wb_run: wandb_run):
+def _test(args: args, prog_bar: Progress, device: torch.cuda.device, model: torch.nn.Module, dl_test: DataLoader, wb_run: Run):
     best_epoch_metric_jaccard_test = 0
     best_epoch_metric_dice_test = 0
     
