@@ -161,9 +161,10 @@ cython_debug/
 
 # Datasets
 
-*datasets*
-*lists*
-*data*
+References/*/data
+References/*/*/lists
+*/data/lists*
+*/data/datasets
 
 # Visual Studio Code
 .vscode
