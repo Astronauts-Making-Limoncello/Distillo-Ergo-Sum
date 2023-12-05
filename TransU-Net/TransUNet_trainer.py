@@ -216,7 +216,7 @@ def _train(
             save_ckpt(model, optimizer, epoch, args.get_args(), f"{args.checkpoint_dir}/ckpt_train_best_dice_loss.pth")
         if train_loss_is_best:
             save_ckpt(model, optimizer, epoch, args.get_args(), f"{args.checkpoint_dir}/ckpt_train_best_loss.pth")
-        if epoch % args.log_every_n_epochs:
+        if epoch % args.log_every_n_epochs == 0:
             save_ckpt(model, optimizer, epoch, args.get_args(), f"{args.checkpoint_dir}/ckpt_epoch_{epoch}.pth")
 
 
@@ -239,7 +239,10 @@ def _train(
             best_epoch_metric_jaccard_val = epoch_metric_jaccard_val
             val_jaccard_is_best = True
 
-        # TODO add val checkpointing when train losses have been implemented in val as well
+        if val_dice_is_best:
+            save_ckpt(model, optimizer, epoch, args.get_args(), f"{args.checkpoint_dir}/ckpt_val_best_dice_loss.pth")
+        if val_jaccard_is_best:
+            save_ckpt(model, optimizer, epoch, args.get_args(), f"{args.checkpoint_dir}/ckpt_val_best_jaccard_loss.pth")
 
         ### --- validation step --- ###
 
