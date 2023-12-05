@@ -162,6 +162,7 @@ cython_debug/
 # Datasets
 
 References/*/data
+References/*/*/lists
 */data/lists*
 */data/datasets
 
