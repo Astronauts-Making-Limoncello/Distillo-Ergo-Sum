@@ -1,7 +1,7 @@
+import os
 import numpy as np
 from DiceLoss import DiceLoss
 import torch
-from tqdm import tqdm
 from rich.progress import Progress
 from rich import print
 from rich.console import Console
@@ -20,9 +20,8 @@ console.print("Is CUDA enabled?", torch.cuda.is_available())
 base_lr = 1e-5
 num_classes = args.num_classes
 batch_size = args.batch_size
-max_iterations = 3000
 max_epochs = args.num_epochs
-iter_num = 0
+
 
 prog_bar = utils.get_progress_bar()
 prog_bar.start()
@@ -57,9 +56,14 @@ def _add_val_prog_bar_tasks(args: args, prog_bar: Progress, num_batches_val: int
     return prog_bar_val_batches_task, prog_bar_val_slices_task, prog_bar_val_metrics_task
 
 def train(args):
+    iter_num = 0
+    os.makedirs(args.checkpoint_dir) if not os.path.exists(args.checkpoint_dir) else None
+
     dataloader_train = get_trainloader()
 
     dataloader_validation = get_validationloader()
+
+    max_iterations = args.num_epochs * len(dataloader_train)
     
     model = init_model()
 
@@ -79,8 +83,14 @@ def train(args):
 
     best_epoch_loss_ce_train = torch.inf
     best_epoch_loss_dice_train = torch.inf
+    best_epoch_loss_train = torch.inf
     best_epoch_metric_dice_val = 0
     best_epoch_metric_jaccard_val = 0
+    
+    train_ce_loss_is_best = False
+    
+    val_dice_is_best = False
+    val_jaccard_is_best = False
     
     optimizer = optim.SGD(model.parameters(), lr=args.base_lr, momentum=args.momentum, weight_decay=args.weight_decay)
 
@@ -95,6 +105,10 @@ def train(args):
         running_loss_ce_train = 0
         running_loss_dice_train = 0
         running_loss_train = 0
+        train_ce_loss_is_best = False
+        train_dice_loss_is_best = False
+        train_loss_is_best = False
+
         model.train()
     
         for sampled_batch in list(dataloader_train)[: num_batches_train]:
@@ -114,15 +128,41 @@ def train(args):
             optimizer.zero_grad()
             loss_train.backward()
             optimizer.step()
-            
+
+            if args.use_lr_scheduler:
+                lr_ = args.base_lr * (1.0 - iter_num / max_iterations) ** 0.9
+                for param_group in optimizer.param_groups:
+                    param_group['lr'] = lr_
+
+            iter_num = iter_num + 1
+
             prog_bar.advance(prog_bar_train_batches_task, 1)
             prog_bar.advance(prog_bar_epochs_task, 1 / (num_batches_train))
         
         epoch_loss_ce_train = running_loss_ce_train / num_batches_train
         epoch_loss_dice_train = running_loss_dice_train / num_batches_train
+        epoch_loss_train = running_loss_train / num_batches_train
 
-        train_ce_is_best   = utils.metric_has_improved(epoch_loss_ce_train  , best_epoch_loss_ce_train, "min")
-        train_dice_is_best = utils.metric_has_improved(epoch_loss_dice_train, best_epoch_loss_dice_train, "min")
+        if epoch_loss_ce_train < best_epoch_loss_ce_train:
+            best_epoch_loss_ce_train = epoch_loss_ce_train
+            train_ce_loss_is_best = True
+        if epoch_loss_dice_train < best_epoch_loss_dice_train:
+            best_epoch_loss_dice_train = epoch_loss_dice_train
+            train_dice_loss_is_best = True
+        if epoch_loss_train < best_epoch_loss_train:
+            best_epoch_loss_train = epoch_loss_train
+            train_loss_is_best = True
+            
+
+        if train_ce_loss_is_best:
+            utils.save_ckpt(model, optimizer, epoch_num, args.get_args(), f"{args.checkpoint_dir}/ckpt_train_best_ce_loss.pth")
+        if train_dice_loss_is_best:
+            utils.save_ckpt(model, optimizer, epoch_num, args.get_args(), f"{args.checkpoint_dir}/ckpt_train_best_dice_loss.pth")
+        if train_loss_is_best:
+            utils.save_ckpt(model, optimizer, epoch_num, args.get_args(), f"{args.checkpoint_dir}/ckpt_train_best_loss.pth")
+        if epoch_num % args.log_every_n_epochs:
+            utils.save_ckpt(model, optimizer, epoch_num, args.get_args(), f"{args.checkpoint_dir}/ckpt_epoch_{epoch_num}.pth")
+
 
         epoch_metric_dice_val, epoch_metric_jaccard_val = validate(
             args, "cuda", model, dataloader_validation, num_batches_val,
@@ -134,8 +174,8 @@ def train(args):
 
         print(
             f"[b][{args.epochs_color}]{epoch_num:03d}[/{args.epochs_color}][/b] | train | "
-            f"Cross-Entropy loss [b][{args.train_batches_color}]{epoch_loss_ce_train.item():02.6f}[/{args.train_batches_color}][/b] {args.loss_is_best_str if train_ce_is_best else args.loss_is_not_best_str} | "
-            f"Dice loss   [b][{args.train_batches_color}]{epoch_loss_dice_train.item():02.6f}[/{args.train_batches_color}][/b] {args.loss_is_best_str if train_dice_is_best else args.loss_is_not_best_str} |"
+            f"Cross-Entropy loss [b][{args.train_batches_color}]{epoch_loss_ce_train.item():02.6f}[/{args.train_batches_color}][/b] {args.loss_is_best_str if train_ce_loss_is_best else args.loss_is_not_best_str} | "
+            f"Dice loss   [b][{args.train_batches_color}]{epoch_loss_dice_train.item():02.6f}[/{args.train_batches_color}][/b] {args.loss_is_best_str if train_dice_loss_is_best else args.loss_is_not_best_str} |"
             f"\n"
             f" | val | "
             f"Jaccard metric     [b][{args.val_batches_color}]{epoch_metric_jaccard_val:02.6f}[/{args.val_batches_color}][/b] {args.metric_is_best_str if val_jaccard_is_best else args.metric_is_not_best_str} | "
@@ -201,9 +241,6 @@ def validate( args: args, device, model: torch.nn.Module, dl_val: DataLoader, nu
         
         for c in range(1, args.num_classes):
             
-            # NOTE about indexing!
-            # Paper excludes black class from segmentation metrics, so we index
-            # running_metric_{dice,jaccard}_val accordingly!
             running_metric_dice_val[c - 1]    += utils.calculate_dice_metric_per_case(prediction == c, label == c)
             running_metric_jaccard_val[c - 1] += utils.calculate_jaccard_metric_per_case(prediction == c, label == c)
 
