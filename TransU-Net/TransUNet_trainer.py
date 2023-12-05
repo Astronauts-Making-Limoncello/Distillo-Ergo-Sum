@@ -419,7 +419,8 @@ def _wandb_init(args: args, model: torch.nn.Module):
 
     wandb_run = wandb.init(project=args.project_name, config=wandb_config, mode=args.wandb_mode)
 
-    wandb_run.watch(model, log='all')
+    if args.wandb_watch_model:
+        wandb_run.watch(model, log='all')
 
     return wandb_run
 
