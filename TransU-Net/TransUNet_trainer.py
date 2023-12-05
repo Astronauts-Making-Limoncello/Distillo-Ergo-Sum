@@ -140,7 +140,7 @@ def _train(
 
     ### --- epoch --- ###
 
-    for epoch in range(args.num_epochs):
+    for epoch in range(1, args.num_epochs + 1):
 
         ### --- train step --- ###
 
