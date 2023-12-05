@@ -177,3 +177,11 @@ References/*/*/test_log/*
 
 *_args.py
 SqueezeU-Net/train copy.py
+
+# Checkpoints
+
+*checkpoints*
+
+# Weights and Biases
+
+*wandb*

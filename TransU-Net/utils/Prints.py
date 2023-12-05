@@ -2,6 +2,8 @@ from rich import print
 
 import torch
 
+from utils.Model import get_num_trainable_parameters
+
 ### --- device --- ###
 
 def print_device_name(device: torch.cuda.device):
@@ -41,9 +43,8 @@ def print_data_summary(
 ### --- model --- ###
 
 def print_num_trainable_parameters(model: torch.nn.Module, num_color: str = "#000000"):
-    n = sum(p.numel() for p in model.parameters() if p.requires_grad)
     
-    print(f"Number of trainable parameters: [{num_color}][b]{n}[/b][/{num_color}]\n")
+    print(f"Number of trainable parameters: [{num_color}][b]{get_num_trainable_parameters(model)}[/b][/{num_color}]\n")
 
 ### --- model --- ###
 

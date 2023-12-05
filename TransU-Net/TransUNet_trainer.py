@@ -40,8 +40,15 @@ import numpy as np
 from utils.Metrics import calculate_dice_metric_per_case
 from utils.Metrics import calculate_hausdorff_metric_per_case
 from utils.Metrics import calculate_jaccard_metric_per_case
-from utils.Metrics import metric_has_improved
 
+import os
+
+from utils.Model import get_num_trainable_parameters
+
+import wandb
+from wandb.wandb_run import Run
+
+from utils.Checkpointing import save_ckpt
 
 ### --- imports --- ###
 
@@ -101,8 +108,14 @@ def _add_train_prog_bar_tasks(args: args, prog_bar: Progress, num_batches_train:
 
 def _train(
     args: args, prog_bar: Progress, device, model: torch.nn.Module, 
-    optimizer: optim.SGD, dl_train: DataLoader, dl_val: DataLoader
+    optimizer: optim.SGD, dl_train: DataLoader, dl_val: DataLoader,
+    wb_run: Run
 ):
+
+    max_iterations = args.num_epochs * len(dl_train)
+    iter_num = 0
+    
+    os.makedirs(args.checkpoint_dir) if not os.path.exists(args.checkpoint_dir) else None
 
     num_batches_train = int(len(dl_train) * args.lim_num_batches_percent_train)
     if num_batches_train == 0:
@@ -111,7 +124,7 @@ def _train(
     num_batches_val = int(len(dl_val) * args.lim_num_batches_percent_val)
     if num_batches_val == 0:
         num_batches_val = 1
-    
+
     prog_bar_epochs_task, prog_bar_train_batches_task = _add_train_prog_bar_tasks(args, prog_bar, num_batches_train)
     prog_bar_val_batches_task, prog_bar_val_slices_task, prog_bar_val_metrics_task = _add_val_prog_bar_tasks(args, prog_bar, num_batches_val)
 
@@ -120,6 +133,8 @@ def _train(
 
     best_epoch_loss_ce_train = torch.inf
     best_epoch_loss_dice_train = torch.inf
+    best_epoch_loss_train = torch.inf
+    
     best_epoch_metric_dice_val = 0
     best_epoch_metric_jaccard_val = 0
 
@@ -137,6 +152,11 @@ def _train(
         running_loss_ce_train = 0
         running_loss_dice_train = 0
         running_loss_train = 0
+        train_ce_loss_is_best = False
+        train_dice_loss_is_best = False
+        train_loss_is_best = False
+        val_dice_is_best = False
+        val_jaccard_is_best = False
 
         model.train()
 
@@ -157,15 +177,48 @@ def _train(
             optimizer.zero_grad()
             loss_train.backward()
             optimizer.step()
+            
+            if args.use_lr_scheduler:
+                lr_ = args.base_lr * (1.0 - iter_num / max_iterations) ** 0.9
+                for param_group in optimizer.param_groups:
+                    param_group['lr'] = lr_
+
+            iter_num = iter_num + 1
 
             prog_bar.advance(prog_bar_train_batches_task, 1)
             prog_bar.advance(prog_bar_epochs_task, 1 / (num_batches_train))
 
         epoch_loss_ce_train = running_loss_ce_train / num_batches_train
         epoch_loss_dice_train = running_loss_dice_train / num_batches_train
+        epoch_loss_train = running_loss_train / num_batches_train
 
-        train_ce_is_best   = metric_has_improved(epoch_loss_ce_train  , best_epoch_loss_ce_train, "min")
-        train_dice_is_best = metric_has_improved(epoch_loss_dice_train, best_epoch_loss_dice_train, "min")
+        wb_run.log(
+            {
+                "loss/full/train": epoch_loss_train,
+                "loss/ce/train": epoch_loss_ce_train,
+                "loss/dice/train": epoch_loss_dice_train,
+            }
+        )
+
+        if epoch_loss_ce_train < best_epoch_loss_ce_train:
+            best_epoch_loss_ce_train = epoch_loss_ce_train
+            train_ce_loss_is_best = True
+        if epoch_loss_dice_train < best_epoch_loss_dice_train:
+            best_epoch_loss_dice_train = epoch_loss_dice_train
+            train_dice_loss_is_best = True
+        if epoch_loss_train < best_epoch_loss_train:
+            best_epoch_loss_train = epoch_loss_train
+            train_loss_is_best = True
+
+        if train_ce_loss_is_best:
+            save_ckpt(model, optimizer, epoch, args.get_args(), f"{args.checkpoint_dir}/ckpt_train_best_ce_loss.pth")
+        if train_dice_loss_is_best:
+            save_ckpt(model, optimizer, epoch, args.get_args(), f"{args.checkpoint_dir}/ckpt_train_best_dice_loss.pth")
+        if train_loss_is_best:
+            save_ckpt(model, optimizer, epoch, args.get_args(), f"{args.checkpoint_dir}/ckpt_train_best_loss.pth")
+        if epoch % args.log_every_n_epochs:
+            save_ckpt(model, optimizer, epoch, args.get_args(), f"{args.checkpoint_dir}/ckpt_epoch_{epoch}.pth")
+
 
         ### --- train step --- ###
         
@@ -174,12 +227,19 @@ def _train(
         ### --- validation step --- ###
 
         epoch_metric_dice_val, epoch_metric_jaccard_val = _validate(
-            args, device, model, dl_val, num_batches_val,
-            prog_bar, prog_bar_val_batches_task, prog_bar_val_slices_task, prog_bar_val_metrics_task
+            "val", epoch, args, device, model, dl_val, num_batches_val,
+            prog_bar, prog_bar_val_batches_task, prog_bar_val_slices_task, prog_bar_val_metrics_task,
+            wb_run
         )
 
-        val_dice_is_best    = metric_has_improved(epoch_metric_dice_val   , best_epoch_metric_dice_val, "max")
-        val_jaccard_is_best = metric_has_improved(epoch_metric_jaccard_val, best_epoch_metric_jaccard_val, "max")
+        if epoch_metric_dice_val > best_epoch_metric_dice_val:
+            best_epoch_metric_dice_val = epoch_metric_dice_val
+            val_dice_is_best = True
+        if epoch_metric_jaccard_val > best_epoch_metric_jaccard_val:
+            best_epoch_metric_jaccard_val = epoch_metric_jaccard_val
+            val_jaccard_is_best = True
+
+        # TODO add val checkpointing when train losses have been implemented in val as well
 
         ### --- validation step --- ###
 
@@ -187,8 +247,8 @@ def _train(
 
         print_end_of_epoch_summary(
             args, epoch,
-            epoch_loss_ce_train, train_ce_is_best,
-            epoch_loss_dice_train, train_dice_is_best,
+            epoch_loss_ce_train, train_ce_loss_is_best,
+            epoch_loss_dice_train, train_dice_loss_is_best,
             epoch_metric_jaccard_val, val_jaccard_is_best,
             epoch_metric_dice_val, val_dice_is_best
         )
@@ -215,9 +275,13 @@ def _add_val_prog_bar_tasks(args: args, prog_bar: Progress, num_batches_val: int
 
 
 def _validate(
-    args: args, device, model: torch.nn.Module, dl_val: DataLoader, num_batches_val: int,
-    prog_bar: Progress, prog_bar_val_batches_task, prog_bar_val_slices_task, prog_bar_val_metrics_task
+    inference_type: str, epoch: int, args: args, device, model: torch.nn.Module, dl_val: DataLoader, num_batches_val: int,
+    prog_bar: Progress, prog_bar_val_batches_task, prog_bar_val_slices_task, prog_bar_val_metrics_task,
+    wb_run: Run
 ):
+    
+    if inference_type not in args.INFERENCE_TYPES:
+        raise ValueError(f"{inference_type} is an invalid inference type. Supported values: {args.INFERENCE_TYPES}")
 
     # one list element --> one segmentation class
     # NOTE about indexing!
@@ -287,6 +351,14 @@ def _validate(
     epoch_metric_dice_val = np.mean(epoch_metric_dice_val, axis=0)
     epoch_metric_jaccard_val = np.mean(epoch_metric_jaccard_val, axis=0)
 
+    wb_run.log(
+        {
+            f"loss/dice/{inference_type}": 1 - epoch_metric_dice_val,
+            f"metric/dice/{inference_type}": epoch_metric_dice_val,
+            f"metric/jaccard/{inference_type}": epoch_metric_jaccard_val
+        }
+    )
+
     return epoch_metric_dice_val, epoch_metric_jaccard_val
 
 ### --- validation --- ###
@@ -303,7 +375,8 @@ def _add_test_prog_bar_tasks(args: args, prog_bar: Progress, num_batches_test: i
     return prog_bar_test_batches_task, prog_bar_test_slices_task, prog_bar_test_metrics_task
 
 def _perform_testing(
-    args: args, prog_bar: Progress, device, model: torch.nn.Module, dl_test: DataLoader
+    args: args, prog_bar: Progress, device, model: torch.nn.Module, dl_test: DataLoader,
+    wb_run: Run
 ):
     
     num_batches_test = int(len(dl_test) * args.lim_num_batches_percent_test)
@@ -313,27 +386,45 @@ def _perform_testing(
     prog_bar_test_batches_task, prog_bar_test_slices_task, prog_bar_test_metrics_task = _add_test_prog_bar_tasks(args, prog_bar, num_batches_test)
     
     return _validate(
-        args, device, model, dl_test, num_batches_test, 
-        prog_bar, prog_bar_test_batches_task, prog_bar_test_slices_task, prog_bar_test_metrics_task
+        "test", args.num_epochs, args, device, model, dl_test, num_batches_test, 
+        prog_bar, prog_bar_test_batches_task, prog_bar_test_slices_task, prog_bar_test_metrics_task,
+        wb_run
     )
 
-def _test(args: args, prog_bar: Progress, device: torch.cuda.device, model: torch.nn.Module, dl_test: DataLoader):
-    best_epoch_metric_jaccard_test = 0
-    best_epoch_metric_dice_test = 0
+def _test(args: args, prog_bar: Progress, device: torch.cuda.device, model: torch.nn.Module, dl_test: DataLoader, wb_run: Run):
     
-    epoch_metric_dice_test, epoch_metric_jaccard_test = _perform_testing(args, prog_bar, device, model, dl_test)
-
-    test_dice_is_best    = metric_has_improved(epoch_metric_dice_test   , best_epoch_metric_dice_test, "max")
-    test_jaccard_is_best = metric_has_improved(epoch_metric_jaccard_test, best_epoch_metric_jaccard_test, "max")
+    epoch_metric_dice_test, epoch_metric_jaccard_test = _perform_testing(args, prog_bar, device, model, dl_test, wb_run)
     
     print_end_of_test_summary(
         args, 
-        epoch_metric_jaccard_test, test_jaccard_is_best,
-        epoch_metric_dice_test, test_dice_is_best
+        epoch_metric_jaccard_test, True,
+        epoch_metric_dice_test, True
     )
 
 
 ### --- test --- ###
+
+################################################################################
+
+### --- Weights and Biases --- ###
+
+def _wandb_init(args: args, model: torch.nn.Module):
+
+    wandb_config = args.get_args()
+    wandb_config.update(
+        {
+            "num_trainable_parameters": get_num_trainable_parameters(model)
+        }
+    )
+
+    wandb_run = wandb.init(project=args.project_name, config=wandb_config, mode=args.wandb_mode)
+
+    wandb_run.watch(model, log='all')
+
+    return wandb_run
+
+
+### --- Weights and Biases --- ###
 
 ################################################################################
 
@@ -366,15 +457,18 @@ def main():
     dl_test = _get_dataloader(ds_test, 1, False, 1, True)
     print_data_summary(args, ds_train, dl_train, ds_val, dl_val, ds_test, dl_test)
 
+    # Weights and Biases
+    wb_run = _wandb_init(args, model)
+
     # progress
     prog_bar = get_progress_bar()
     prog_bar.start()
 
     # training (and validation!)
-    _train(args, prog_bar, device, model, optimizer, dl_train, dl_val)
+    _train(args, prog_bar, device, model, optimizer, dl_train, dl_val, wb_run)
 
     # testing
-    _test(args, prog_bar, device, model, dl_test)
+    _test(args, prog_bar, device, model, dl_test, wb_run)
 
 
     
