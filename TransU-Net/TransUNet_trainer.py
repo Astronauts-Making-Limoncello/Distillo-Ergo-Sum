@@ -40,7 +40,6 @@ import numpy as np
 from utils.Metrics import calculate_dice_metric_per_case
 from utils.Metrics import calculate_hausdorff_metric_per_case
 from utils.Metrics import calculate_jaccard_metric_per_case
-from utils.Metrics import metric_has_improved
 
 import os
 
