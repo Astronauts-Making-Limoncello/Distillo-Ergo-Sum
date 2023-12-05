@@ -1,6 +1,6 @@
 import torch
-from dataset import RandomGenerator, Synapse_dataset
-#from torchvision import transforms
+from synapse import RandomGenerator, Synapse_dataset
+from torchvision import transforms
 from torch.utils.data import DataLoader
 from rich.progress import *
 from rich import print
@@ -21,32 +21,28 @@ def get_progress_bar() -> Progress:
         SpinnerColumn()
     )
 
-def get_dataset_train(batch_size: int, num_workers: int, pin_memory: bool) -> Synapse_dataset:
-    root_path = r"C:\Users\giaco\Documents\GIACOMO\SAPIENZA\AML\Project\project_TransUNet\data\Synapse\train_npz"
-    list_dir = r'C:\Users\giaco\Documents\GIACOMO\SAPIENZA\AML\Project\project_TransUNet\TransUNet\lists\lists_Synapse'
+def get_dataset_train(root_path: str, list_dir: str, split_name: str, batch_size: int, num_workers: int, pin_memory: bool) -> Synapse_dataset:
 
-    train_dataset = Synapse_dataset(base_dir=root_path, list_dir=list_dir, split='train',
-        # transform=transforms.Compose(
-        #     [
-        #         RandomGenerator(output_size=[512, 512])
-        #     ]
-        # )
+    train_dataset = Synapse_dataset(base_dir=root_path, list_dir=list_dir, split=split_name,
+        transform=transforms.Compose(
+            [
+                RandomGenerator(output_size=[512, 512])
+            ]
+        )
     )
     return DataLoader(
         dataset=train_dataset, batch_size=batch_size, shuffle=True, 
         num_workers=num_workers, pin_memory=pin_memory
     )
 
-def get_dataset_test(batch_size: int, num_workers: int, pin_memory: bool) -> Synapse_dataset:
-    root_path = r"C:\Users\giaco\Documents\GIACOMO\SAPIENZA\AML\Project\project_TransUNet\data\Synapse\test_vol_h5"
-    list_dir = r'C:\Users\giaco\Documents\GIACOMO\SAPIENZA\AML\Project\project_TransUNet\TransUNet\lists\lists_Synapse'
+def get_dataset_test(root_path: str, list_dir: str, split_name: str, batch_size: int, num_workers: int, pin_memory: bool) -> Synapse_dataset:
 
     test_dataset = Synapse_dataset(base_dir=root_path, list_dir=list_dir, split='test_vol',
-        # transform=transforms.Compose(
-        #     [
-        #         RandomGenerator(output_size=[512, 512])
-        #     ]
-        # )
+        transform=transforms.Compose(
+            [
+                RandomGenerator(output_size=[512, 512])
+            ]
+        )
     )
 
     return DataLoader(
@@ -55,16 +51,14 @@ def get_dataset_test(batch_size: int, num_workers: int, pin_memory: bool) -> Syn
     )
 
 
-def get_dataset_validation(batch_size: int, num_workers: int, pin_memory: bool) -> Synapse_dataset:
-    root_path = r"C:\Users\giaco\Documents\GIACOMO\SAPIENZA\AML\Project\project_TransUNet\data\Synapse\val_vol_h5"
-    list_dir = r'C:\Users\giaco\Documents\GIACOMO\SAPIENZA\AML\Project\project_TransUNet\TransUNet\lists\lists_Synapse'
+def get_dataset_validation(root_path: str, list_dir: str, split_name: str, batch_size: int, num_workers: int, pin_memory: bool) -> Synapse_dataset:
 
     val_dataset = Synapse_dataset(base_dir=root_path, list_dir=list_dir, split='val_vol',
-        # transform=transforms.Compose(
-        #     [
-        #         RandomGenerator(output_size=[512, 512])
-        #     ]
-        # )
+        transform=transforms.Compose(
+            [
+                RandomGenerator(output_size=[512, 512])
+            ]
+        )
     )
 
     return DataLoader(
