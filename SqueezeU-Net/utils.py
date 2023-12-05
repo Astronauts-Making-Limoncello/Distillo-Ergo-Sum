@@ -1,5 +1,6 @@
 import torch
-from synapse import RandomGenerator, Synapse_dataset
+# from synapse import RandomGenerator, Synapse_dataset
+from data.dataset_synapse import RandomGenerator, Synapse_dataset
 from torchvision import transforms
 from torch.utils.data import DataLoader
 from rich.progress import *
