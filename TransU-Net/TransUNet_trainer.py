@@ -112,6 +112,9 @@ def _train(
     optimizer: optim.SGD, dl_train: DataLoader, dl_val: DataLoader,
     wb_run: Run
 ):
+
+    max_iterations = args.num_epochs * len(dl_train)
+    iter_num = 0
     
     os.makedirs(args.checkpoint_dir) if not os.path.exists(args.checkpoint_dir) else None
 
@@ -122,7 +125,7 @@ def _train(
     num_batches_val = int(len(dl_val) * args.lim_num_batches_percent_val)
     if num_batches_val == 0:
         num_batches_val = 1
-    
+
     prog_bar_epochs_task, prog_bar_train_batches_task = _add_train_prog_bar_tasks(args, prog_bar, num_batches_train)
     prog_bar_val_batches_task, prog_bar_val_slices_task, prog_bar_val_metrics_task = _add_val_prog_bar_tasks(args, prog_bar, num_batches_val)
 
@@ -150,6 +153,11 @@ def _train(
         running_loss_ce_train = 0
         running_loss_dice_train = 0
         running_loss_train = 0
+        train_ce_loss_is_best = False
+        train_dice_loss_is_best = False
+        train_loss_is_best = False
+        val_dice_is_best = False
+        val_jaccard_is_best = False
 
         model.train()
 
@@ -170,6 +178,13 @@ def _train(
             optimizer.zero_grad()
             loss_train.backward()
             optimizer.step()
+            
+            if args.use_lr_scheduler:
+                lr_ = args.base_lr * (1.0 - iter_num / max_iterations) ** 0.9
+                for param_group in optimizer.param_groups:
+                    param_group['lr'] = lr_
+
+            iter_num = iter_num + 1
 
             prog_bar.advance(prog_bar_train_batches_task, 1)
             prog_bar.advance(prog_bar_epochs_task, 1 / (num_batches_train))
@@ -186,9 +201,15 @@ def _train(
             }
         )
 
-        train_ce_loss_is_best   = metric_has_improved(epoch_loss_ce_train  , best_epoch_loss_ce_train  , "min")
-        train_dice_loss_is_best = metric_has_improved(epoch_loss_dice_train, best_epoch_loss_dice_train, "min")
-        train_loss_is_best      = metric_has_improved(epoch_loss_train     , best_epoch_loss_train     , "min")
+        if epoch_loss_ce_train < best_epoch_loss_ce_train:
+            best_epoch_loss_ce_train = epoch_loss_ce_train
+            train_ce_loss_is_best = True
+        if epoch_loss_dice_train < best_epoch_loss_dice_train:
+            best_epoch_loss_dice_train = epoch_loss_dice_train
+            train_dice_loss_is_best = True
+        if epoch_loss_train < best_epoch_loss_train:
+            best_epoch_loss_train = epoch_loss_train
+            train_loss_is_best = True
 
         if train_ce_loss_is_best:
             save_ckpt(model, optimizer, epoch, args.get_args(), f"{args.checkpoint_dir}/ckpt_train_best_ce_loss.pth")
@@ -212,8 +233,12 @@ def _train(
             wb_run
         )
 
-        val_dice_is_best    = metric_has_improved(epoch_metric_dice_val   , best_epoch_metric_dice_val, "max")
-        val_jaccard_is_best = metric_has_improved(epoch_metric_jaccard_val, best_epoch_metric_jaccard_val, "max")
+        if epoch_metric_dice_val > best_epoch_metric_dice_val:
+            best_epoch_metric_dice_val = epoch_metric_dice_val
+            val_dice_is_best = True
+        if epoch_metric_jaccard_val > best_epoch_metric_jaccard_val:
+            best_epoch_metric_jaccard_val = epoch_metric_jaccard_val
+            val_jaccard_is_best = True
 
         # TODO add val checkpointing when train losses have been implemented in val as well
 
@@ -368,18 +393,13 @@ def _perform_testing(
     )
 
 def _test(args: args, prog_bar: Progress, device: torch.cuda.device, model: torch.nn.Module, dl_test: DataLoader, wb_run: Run):
-    best_epoch_metric_jaccard_test = 0
-    best_epoch_metric_dice_test = 0
     
     epoch_metric_dice_test, epoch_metric_jaccard_test = _perform_testing(args, prog_bar, device, model, dl_test, wb_run)
-
-    test_dice_is_best    = metric_has_improved(epoch_metric_dice_test   , best_epoch_metric_dice_test, "max")
-    test_jaccard_is_best = metric_has_improved(epoch_metric_jaccard_test, best_epoch_metric_jaccard_test, "max")
     
     print_end_of_test_summary(
         args, 
-        epoch_metric_jaccard_test, test_jaccard_is_best,
-        epoch_metric_dice_test, test_dice_is_best
+        epoch_metric_jaccard_test, True,
+        epoch_metric_dice_test, True
     )
 
 
