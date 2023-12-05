@@ -35,7 +35,7 @@ class SqueezeUNet(nn.Module):
         self.final_conv = nn.Conv2d(32, num_classes, kernel_size=1)
 
     def forward(self, x):
-        x = x.unsqueeze(1)
+        # x = x.unsqueeze(1)
 
         # Contracting Path
         x1 = self.down1(x)
