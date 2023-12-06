@@ -1,5 +1,7 @@
 import torch
 
+from rich import print
+
 def save_ckpt(
     model: torch.nn.Module, optimizer: torch.optim, epoch: int, args: dict, ckpt_file_full_path: str
 ):
