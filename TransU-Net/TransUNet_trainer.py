@@ -194,6 +194,7 @@ def _train(
 
         wb_run.log(
             {
+                "epoch": epoch,
                 "loss/full/train": epoch_loss_train,
                 "loss/ce/train": epoch_loss_ce_train,
                 "loss/dice/train": epoch_loss_dice_train,
