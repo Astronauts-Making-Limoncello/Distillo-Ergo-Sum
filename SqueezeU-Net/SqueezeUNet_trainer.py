@@ -159,7 +159,8 @@ def _train(
             img_batch_train  = batch_train["image"].to(device)
             gt_batch_train   = batch_train["label"].to(device)
             
-            img_batch_train = img_batch_train.unsqueeze(1)
+            if args.train_transforms is None:
+                img_batch_train = img_batch_train.unsqueeze(1)
 
             outputs = model(img_batch_train)
             # outputs.shape matches TransU-Net's output shape!!!
