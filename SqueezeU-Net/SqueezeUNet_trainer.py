@@ -38,6 +38,13 @@ from utilities.Prints import print_end_of_epoch_summary
 
 import numpy as np
 
+from scipy.ndimage import zoom
+
+from utilities.Metrics import calculate_dice_metric_per_case
+from utilities.Metrics import calculate_jaccard_metric_per_case
+
+from utilities.Prints import print_end_of_test_summary
+
 ### --- model --- ###
 
 def _init_model(args: args, device) -> SqueezeUNet:
@@ -293,7 +300,55 @@ def _validate(
     model.eval()
 
     for batch_val in list(dl_val)[: num_batches_val]:
-        pass
+        img_batch_val = batch_val["image"] 
+        label_batch_val = batch_val["label"]
+        
+        image = img_batch_val.squeeze(0).cpu().detach().numpy()
+        label = label_batch_val.squeeze(0).cpu().detach().numpy()
+        prediction = np.zeros_like(label)
+
+        num_slices = image.shape[0]
+
+        prog_bar.reset(task_id=prog_bar_val_slices_task, total=num_slices)
+        prog_bar.reset(task_id=prog_bar_val_metrics_task, total=args.num_classes_for_metrics)
+
+        for ind in range(num_slices):
+            slice = image[ind, :, :]
+
+            x, y = slice.shape[0], slice.shape[1]
+            
+            if x != args.img_size or y != args.img_size:
+                slice = zoom(slice, (args.img_size / x, args.img_size / y), order=3)
+
+            input = torch.from_numpy(slice).unsqueeze(0).unsqueeze(0).float().to(device)
+
+            with torch.no_grad():
+                outputs = model(input)
+
+                out = torch.argmax(torch.softmax(outputs, dim=1), dim=1).squeeze(0)
+                out = out.cpu().detach().numpy()
+
+                if x != args.img_size or y != args.img_size:
+                    pred = zoom(out, (x / args.img_size, y / args.img_size), order=0)
+                else:
+                    pred = out
+
+                prediction[ind] = pred
+
+            prog_bar.advance(task_id=prog_bar_val_slices_task, advance=1)
+        
+        for c in range(1, args.num_classes):
+            
+            # NOTE about indexing!
+            # Paper excludes black class from segmentation metrics, so we index
+            # running_metric_{dice,jaccard}_val accordingly!
+            running_metric_dice_val[c - 1]    += calculate_dice_metric_per_case(prediction == c, label == c)
+            running_metric_jaccard_val[c - 1] += calculate_jaccard_metric_per_case(prediction == c, label == c)
+
+            prog_bar.advance(task_id=prog_bar_val_metrics_task, advance=1)
+        prog_bar.update(task_id=prog_bar_val_metrics_task, total=args.num_classes_for_metrics)
+
+        prog_bar.update(task_id=prog_bar_val_batches_task, advance=1)
 
     
     
@@ -316,6 +371,47 @@ def _validate(
     return epoch_metric_dice_val, epoch_metric_jaccard_val
 
 ### --- validation --- ###
+
+################################################################################
+
+### --- test --- ###
+
+def _add_test_prog_bar_tasks(args: args, prog_bar: Progress, num_batches_test: int):
+    prog_bar_test_batches_task = prog_bar.add_task(description=args.test_batches_task_descr, total=num_batches_test)
+    prog_bar_test_slices_task = prog_bar.add_task(description=args.test_slices_task_descr, total=69)
+    prog_bar_test_metrics_task = prog_bar.add_task(description=args.test_metrics_task_descr, total=args.num_classes)
+
+    return prog_bar_test_batches_task, prog_bar_test_slices_task, prog_bar_test_metrics_task
+
+def _perform_testing(
+    args: args, prog_bar: Progress, device, model: torch.nn.Module, dl_test: DataLoader,
+    wb_run: Run
+):
+    
+    num_batches_test = int(len(dl_test) * args.lim_num_batches_percent_test)
+    if num_batches_test == 0:
+        num_batches_test = 1
+
+    prog_bar_test_batches_task, prog_bar_test_slices_task, prog_bar_test_metrics_task = _add_test_prog_bar_tasks(args, prog_bar, num_batches_test)
+    
+    return _validate(
+        "test", args.num_epochs, args, device, model, dl_test, num_batches_test, 
+        prog_bar, prog_bar_test_batches_task, prog_bar_test_slices_task, prog_bar_test_metrics_task,
+        wb_run
+    )
+
+def _test(args: args, prog_bar: Progress, device: torch.cuda.device, model: torch.nn.Module, dl_test: DataLoader, wb_run: Run):
+    
+    epoch_metric_dice_test, epoch_metric_jaccard_test = _perform_testing(args, prog_bar, device, model, dl_test, wb_run)
+    
+    print_end_of_test_summary(
+        args, 
+        epoch_metric_jaccard_test, True,
+        epoch_metric_dice_test, True
+    )
+
+
+### --- test --- ###
 
 ################################################################################
 
@@ -357,6 +453,9 @@ def main():
 
     # training (and validation!)
     _train(args, prog_bar, device, model, optimizer, dl_train, dl_val, wb_run)
+
+    # testing
+    _test(args, prog_bar, device, model, dl_test, wb_run)
 
 
 
