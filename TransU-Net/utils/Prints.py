@@ -69,7 +69,7 @@ def print_end_of_epoch_summary(
         f"Dice metric [b][{args.val_batches_color}]{epoch_metric_dice_val:02.6f}[/{args.val_batches_color}][/b] {args.metric_is_best_str if val_dice_is_best else args.metric_is_not_best_str} |"
     )
 
-    if epoch + 1 != args.num_epochs:
+    if epoch != args.num_epochs:
         print()
 
 ### --- training --- ###
