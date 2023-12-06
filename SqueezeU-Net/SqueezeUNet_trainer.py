@@ -32,6 +32,8 @@ from utilities.DiceLoss import DiceLoss
 
 import os
 
+from utilities.Checkpointing import save_ckpt
+
 ### --- model --- ###
 
 def _init_model(args: args, device) -> SqueezeUNet:
@@ -185,6 +187,37 @@ def _train(
 
             prog_bar.advance(prog_bar_train_batches_task, 1)
             prog_bar.advance(prog_bar_epochs_task, 1 / (num_batches_train))
+
+        epoch_loss_ce_train = running_loss_ce_train / num_batches_train
+        epoch_loss_dice_train = running_loss_dice_train / num_batches_train
+        epoch_loss_train = running_loss_train / num_batches_train
+
+        wb_run.log(
+            {
+                "loss/full/train": epoch_loss_train,
+                "loss/ce/train": epoch_loss_ce_train,
+                "loss/dice/train": epoch_loss_dice_train,
+            }
+        )
+
+        if epoch_loss_ce_train < best_epoch_loss_ce_train:
+            best_epoch_loss_ce_train = epoch_loss_ce_train
+            train_ce_loss_is_best = True
+        if epoch_loss_dice_train < best_epoch_loss_dice_train:
+            best_epoch_loss_dice_train = epoch_loss_dice_train
+            train_dice_loss_is_best = True
+        if epoch_loss_train < best_epoch_loss_train:
+            best_epoch_loss_train = epoch_loss_train
+            train_loss_is_best = True
+
+        if train_ce_loss_is_best:
+            save_ckpt(model, optimizer, epoch, args.get_args(), f"{args.checkpoint_dir}/ckpt_train_best_ce_loss.pth")
+        if train_dice_loss_is_best:
+            save_ckpt(model, optimizer, epoch, args.get_args(), f"{args.checkpoint_dir}/ckpt_train_best_dice_loss.pth")
+        if train_loss_is_best:
+            save_ckpt(model, optimizer, epoch, args.get_args(), f"{args.checkpoint_dir}/ckpt_train_best_loss.pth")
+        if epoch % args.log_every_n_epochs == 0:
+            save_ckpt(model, optimizer, epoch, args.get_args(), f"{args.checkpoint_dir}/ckpt_epoch_{epoch}.pth")
         
         ### --- train step --- ###
         
