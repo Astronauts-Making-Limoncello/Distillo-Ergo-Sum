@@ -12,3 +12,11 @@ def save_ckpt(
         },
         ckpt_file_full_path
     )
+
+def load_ckpt(model: torch.nn.Module, ckpt_file_path: str) -> torch.nn.Module:
+    
+    ckpt = torch.load(ckpt_file_path)
+
+    model.load_state_dict(state_dict=ckpt["model_state_dict"])
+
+    return model
