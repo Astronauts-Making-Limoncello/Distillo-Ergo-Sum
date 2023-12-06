@@ -48,7 +48,7 @@ from utils.Model import get_num_trainable_parameters
 import wandb
 from wandb.wandb_run import Run
 
-from utils.Checkpointing import save_ckpt
+from utils.Checkpointing import save_ckpt, load_ckpt
 
 ### --- imports --- ###
 
@@ -241,7 +241,8 @@ def _train(
             val_jaccard_is_best = True
 
         if val_dice_is_best:
-            save_ckpt(model, optimizer, epoch, args.get_args(), f"{args.checkpoint_dir}/ckpt_val_best_dice_loss.pth")
+            best_val_ckpt_path = f"{args.checkpoint_dir}/ckpt_val_best_dice_loss.pth"
+            save_ckpt(model, optimizer, epoch, args.get_args(), best_val_ckpt_path)
         if val_jaccard_is_best:
             save_ckpt(model, optimizer, epoch, args.get_args(), f"{args.checkpoint_dir}/ckpt_val_best_jaccard_loss.pth")
 
@@ -263,6 +264,7 @@ def _train(
 
     ### --- epoch --- ###
 
+    return best_val_ckpt_path
 
 ### --- training --- ###
 
@@ -357,6 +359,7 @@ def _validate(
 
     wb_run.log(
         {
+            "epoch": epoch,
             f"loss/dice/{inference_type}": 1 - epoch_metric_dice_val,
             f"metric/dice/{inference_type}": epoch_metric_dice_val,
             f"metric/jaccard/{inference_type}": epoch_metric_jaccard_val
@@ -412,16 +415,20 @@ def _test(args: args, prog_bar: Progress, device: torch.cuda.device, model: torc
 
 ### --- Weights and Biases --- ###
 
-def _wandb_init(args: args, model: torch.nn.Module):
+def _wandb_init(args: args, model: torch.nn.Module, optimizer: torch.optim):
 
     wandb_config = args.get_args()
     wandb_config.update(
         {
-            "num_trainable_parameters": get_num_trainable_parameters(model)
+            "num_trainable_parameters": get_num_trainable_parameters(model),
+            "optimizer": str(optimizer)
         }
     )
 
-    wandb_run = wandb.init(project=args.project_name, config=wandb_config, mode=args.wandb_mode)
+    wandb_run = wandb.init(
+        project=args.wandb_project_name, group=args.wandb_group, job_type=args.wandb_job_type,
+        config=wandb_config, mode=args.wandb_mode
+    )
 
     if args.wandb_watch_model:
         wandb_run.watch(model, log='all')
@@ -463,16 +470,17 @@ def main():
     print_data_summary(args, ds_train, dl_train, ds_val, dl_val, ds_test, dl_test)
 
     # Weights and Biases
-    wb_run = _wandb_init(args, model)
+    wb_run = _wandb_init(args, model, optimizer)
 
     # progress
     prog_bar = get_progress_bar()
     prog_bar.start()
 
     # training (and validation!)
-    _train(args, prog_bar, device, model, optimizer, dl_train, dl_val, wb_run)
+    best_val_ckpt_path = _train(args, prog_bar, device, model, optimizer, dl_train, dl_val, wb_run)
 
-    # testing
+    # loading best val checkpoint to perform test on it!
+    model = load_ckpt(model, best_val_ckpt_path)
     _test(args, prog_bar, device, model, dl_test, wb_run)
 
 
