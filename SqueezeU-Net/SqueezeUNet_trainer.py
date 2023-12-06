@@ -83,12 +83,13 @@ def _get_dataloader(dataset, batch_size, shuffle, num_workers, pin_memory) -> Da
 
 ### --- Weights and Biases --- ###
 
-def _wandb_init(args: args, model: torch.nn.Module):
+def _wandb_init(args: args, model: torch.nn.Module, optimizer: torch.optim):
 
     wandb_config = args.get_args()
     wandb_config.update(
         {
-            "num_trainable_parameters": get_num_trainable_parameters(model)
+            "num_trainable_parameters": get_num_trainable_parameters(model),
+            "optimizer": str(optimizer)
         }
     )
 
@@ -363,6 +364,7 @@ def _validate(
 
     wb_run.log(
         {
+            "epoch": epoch,
             f"loss/dice/{inference_type}": 1 - epoch_metric_dice_val,
             f"metric/dice/{inference_type}": epoch_metric_dice_val,
             f"metric/jaccard/{inference_type}": epoch_metric_jaccard_val
@@ -432,8 +434,11 @@ def main():
     # model
     model = _init_model(args, device)
     
-    optimizer = torch.optim.SGD(
-        model.parameters(), lr=args.base_lr, momentum=args.momentum, weight_decay=args.weight_decay
+    # optimizer = torch.optim.SGD(
+    #     model.parameters(), lr=args.base_lr, momentum=args.momentum, weight_decay=args.weight_decay
+    # )
+    optimizer = torch.optim.Adam(
+        model.parameters(), lr=args.base_lr, weight_decay=args.weight_decay, amsgrad=args.use_amsgrad
     )
 
     # data
@@ -446,7 +451,7 @@ def main():
     print_data_summary(args, ds_train, dl_train, ds_val, dl_val, ds_test, dl_test)
 
     # Weights and Biases
-    wb_run = _wandb_init(args, model)
+    wb_run = _wandb_init(args, model, optimizer)
 
     # progress
     prog_bar = get_progress_bar()
