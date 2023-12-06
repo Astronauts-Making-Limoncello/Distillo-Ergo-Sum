@@ -14,25 +14,28 @@ class FireModule(nn.Module):
         return torch.cat([F.relu(self.expand1x1(x)), F.relu(self.expand3x3(x))], 1)
 
 class SqueezeUNet(nn.Module):
-    def __init__(self, num_classes = 1):
+    def __init__(self, num_classes = 1, channels_shrink_factor=1):
         super(SqueezeUNet, self).__init__()
+
+        self.channels_shrink_factor = channels_shrink_factor
+
         # Contracting Path
-        self.down1 = FireModule(1, 16, 32)
-        self.down2 = FireModule(32, 16, 64)
-        self.down3 = FireModule(64, 32, 128)
-        self.down4 = FireModule(128, 48, 256)
+        self.down1 = FireModule(1, int(16 / self.channels_shrink_factor), int(32 / self.channels_shrink_factor))
+        self.down2 = FireModule(int(32 / self.channels_shrink_factor), int(16 / self.channels_shrink_factor), int(64 / self.channels_shrink_factor))
+        self.down3 = FireModule(int(64 / self.channels_shrink_factor), int(32 / self.channels_shrink_factor), int(128 / self.channels_shrink_factor))
+        self.down4 = FireModule(int(128 / self.channels_shrink_factor), int(48 / self.channels_shrink_factor), int(256 / self.channels_shrink_factor))
 
         # Bottleneck
-        self.bottleneck = FireModule(256, 64, 512)
+        self.bottleneck = FireModule(int(256 / self.channels_shrink_factor), int(64 / self.channels_shrink_factor), int(512 / self.channels_shrink_factor))
 
         # Expansive Path
-        self.up4 = FireModule(512 + 256, 48, 256)
-        self.up3 = FireModule(256 + 128, 32, 128)
-        self.up2 = FireModule(128 + 64, 16, 64)
-        self.up1 = FireModule(64 + 32, 16, 32)
+        self.up4 = FireModule(int(512 / self.channels_shrink_factor) + int(256 / self.channels_shrink_factor), int(48 / self.channels_shrink_factor), int(256 / self.channels_shrink_factor))
+        self.up3 = FireModule(int(256 / self.channels_shrink_factor) + int(128 / self.channels_shrink_factor), int(32 / self.channels_shrink_factor), int(128 / self.channels_shrink_factor))
+        self.up2 = FireModule(int(128 / self.channels_shrink_factor) + int(64 / self.channels_shrink_factor), int(16 / self.channels_shrink_factor), int(64 / self.channels_shrink_factor))
+        self.up1 = FireModule(int(64 / self.channels_shrink_factor) + int(32 / self.channels_shrink_factor), int(16 / self.channels_shrink_factor), int(32 / self.channels_shrink_factor))
 
         # Final convolution
-        self.final_conv = nn.Conv2d(32, num_classes, kernel_size=1)
+        self.final_conv = nn.Conv2d(int(32 / self.channels_shrink_factor), num_classes, kernel_size=1)
 
     def forward(self, x):
         # x = x.unsqueeze(1)
@@ -70,6 +73,3 @@ class SqueezeUNet(nn.Module):
         # Final convolution
         out = self.final_conv(up1)
         return out
-
-# Create the model
-model = SqueezeUNet()
