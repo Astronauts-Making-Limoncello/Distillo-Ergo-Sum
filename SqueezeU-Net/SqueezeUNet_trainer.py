@@ -34,6 +34,10 @@ import os
 
 from utilities.Checkpointing import save_ckpt
 
+from utilities.Prints import print_end_of_epoch_summary
+
+import numpy as np
+
 ### --- model --- ###
 
 def _init_model(args: args, device) -> SqueezeUNet:
@@ -223,6 +227,40 @@ def _train(
         
         ########################################################################
 
+        ### --- validation step --- ###
+
+        epoch_metric_dice_val, epoch_metric_jaccard_val = _validate(
+            "val", epoch, args, device, model, dl_val, num_batches_val,
+            prog_bar, prog_bar_val_batches_task, prog_bar_val_slices_task, prog_bar_val_metrics_task,
+            wb_run
+        )
+
+        if epoch_metric_dice_val > best_epoch_metric_dice_val:
+            best_epoch_metric_dice_val = epoch_metric_dice_val
+            val_dice_is_best = True
+        if epoch_metric_jaccard_val > best_epoch_metric_jaccard_val:
+            best_epoch_metric_jaccard_val = epoch_metric_jaccard_val
+            val_jaccard_is_best = True
+
+        if val_dice_is_best:
+            save_ckpt(model, optimizer, epoch, args.get_args(), f"{args.checkpoint_dir}/ckpt_val_best_dice_loss.pth")
+        if val_jaccard_is_best:
+            save_ckpt(model, optimizer, epoch, args.get_args(), f"{args.checkpoint_dir}/ckpt_val_best_jaccard_loss.pth")
+
+        ### --- validation step --- ###
+
+        ########################################################################
+
+        print_end_of_epoch_summary(
+            args, epoch,
+            epoch_loss_ce_train, train_ce_loss_is_best,
+            epoch_loss_dice_train, train_dice_loss_is_best,
+            epoch_metric_jaccard_val, val_jaccard_is_best,
+            epoch_metric_dice_val, val_dice_is_best
+        )
+
+        prog_bar.update(task_id=prog_bar_epochs_task, total=args.num_epochs)
+
 ### --- training --- ###
 
 ################################################################################
@@ -235,6 +273,47 @@ def _add_val_prog_bar_tasks(args: args, prog_bar: Progress, num_batches_val: int
     prog_bar_val_metrics_task = prog_bar.add_task(description=args.val_metrics_task_descr, total=args.num_classes)
 
     return prog_bar_val_batches_task, prog_bar_val_slices_task, prog_bar_val_metrics_task
+
+def _validate(
+    inference_type: str, epoch: int, args: args, device, model: torch.nn.Module, dl_val: DataLoader, num_batches_val: int,
+    prog_bar: Progress, prog_bar_val_batches_task, prog_bar_val_slices_task, prog_bar_val_metrics_task,
+    wb_run: Run
+):
+    
+    if inference_type not in args.INFERENCE_TYPES:
+        raise ValueError(f"{inference_type} is an invalid inference type. Supported values: {args.INFERENCE_TYPES}")
+
+    # one list element --> one segmentation class
+    # NOTE about indexing!
+    # Paper excludes black class from segmentation metrics, so we index
+    # running_metric_{dice,jaccard}_val accordingly!
+    running_metric_dice_val    = [0] * args.num_classes_for_metrics
+    running_metric_jaccard_val = [0] * args.num_classes_for_metrics
+    
+    model.eval()
+
+    for batch_val in list(dl_val)[: num_batches_val]:
+        pass
+
+    
+    
+    
+    epoch_metric_dice_val = np.array(running_metric_dice_val) / num_batches_val
+    epoch_metric_jaccard_val = np.array(running_metric_jaccard_val) / num_batches_val
+
+    # averaging across segmentation classes
+    epoch_metric_dice_val = np.mean(epoch_metric_dice_val, axis=0)
+    epoch_metric_jaccard_val = np.mean(epoch_metric_jaccard_val, axis=0)
+
+    wb_run.log(
+        {
+            f"loss/dice/{inference_type}": 1 - epoch_metric_dice_val,
+            f"metric/dice/{inference_type}": epoch_metric_dice_val,
+            f"metric/jaccard/{inference_type}": epoch_metric_jaccard_val
+        }
+    )
+
+    return epoch_metric_dice_val, epoch_metric_jaccard_val
 
 ### --- validation --- ###
 
