@@ -64,6 +64,22 @@ def _init_model(args: args, device) -> SqueezeUNet:
 
 ################################################################################
 
+### --- optimizer --- ###
+
+def _init_optimizer(args: args, model: torch.nn.Module) -> torch.optim:
+
+    if args.optimizer_type == "Adam":
+        return torch.optim.Adam(params=model.parameters(), lr=args.base_lr, weight_decay=args.weight_decay, amsgrad=args.use_amsgrad)
+    
+    if args.optimizer_type == "SGD":
+        return torch.optim.SGD(params=model.parameters(), lr=args.base_lr, momentum=args.momentum, weight_decay=args.weight_decay)
+    
+    raise ValueError(f"{args.optimizer_type} optimizer not supported. Valid options: SGD, Adam")
+
+### --- optimizer --- ###
+
+################################################################################
+
 ### --- data --- ###
 
 def _get_dataset(base_dir, list_dir, split, transform):
@@ -439,13 +455,9 @@ def main():
 
     # model
     model = _init_model(args, device)
-    
-    # optimizer = torch.optim.SGD(
-    #     model.parameters(), lr=args.base_lr, momentum=args.momentum, weight_decay=args.weight_decay
-    # )
-    optimizer = torch.optim.Adam(
-        model.parameters(), lr=args.base_lr, weight_decay=args.weight_decay, amsgrad=args.use_amsgrad
-    )
+
+    # optimizer
+    optimizer = _init_optimizer(args, model)
 
     # data
     ds_train = _get_dataset(base_dir=args.train_root_path, list_dir=args.list_dir, split="train", transform=args.train_transforms)
