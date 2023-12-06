@@ -32,7 +32,7 @@ from utilities.DiceLoss import DiceLoss
 
 import os
 
-from utilities.Checkpointing import save_ckpt, load_ckpt
+from utilities.Checkpointing import save_ckpt, load_ckpt, handle_resume_from_ckpt
 
 from utilities.Prints import print_end_of_epoch_summary
 
@@ -135,7 +135,7 @@ def _add_train_prog_bar_tasks(args: args, prog_bar: Progress, num_batches_train:
 
 
 def _train(
-    args: args, prog_bar: Progress, device, model: torch.nn.Module, 
+    args: args, starting_epoch: int, prog_bar: Progress, device, model: torch.nn.Module, 
     optimizer: torch.optim.SGD, dl_train: DataLoader, dl_val: DataLoader,
     wb_run: Run
 ):
@@ -168,7 +168,7 @@ def _train(
 
     ### --- epoch --- ###
 
-    for epoch in range(1, args.num_epochs + 1):
+    for epoch in range(starting_epoch, starting_epoch + args.num_epochs + 1):
         ### --- train step --- ###
         
         prog_bar.reset(prog_bar_train_batches_task)
@@ -459,6 +459,9 @@ def main():
     # optimizer
     optimizer = _init_optimizer(args, model)
 
+    # resume from ckpt, if specified in args
+    starting_epoch, model, optimizer = handle_resume_from_ckpt(args, model, optimizer)
+
     # data
     ds_train = _get_dataset(base_dir=args.train_root_path, list_dir=args.list_dir, split="train", transform=args.train_transforms)
     dl_train = _get_dataloader(ds_train, args.batch_size, True, args.num_workers, pin_memory=args.pin_memory)
@@ -476,7 +479,7 @@ def main():
     prog_bar.start()
 
     # training (and validation!)
-    best_val_ckpt_path = _train(args, prog_bar, device, model, optimizer, dl_train, dl_val, wb_run)
+    best_val_ckpt_path = _train(args, starting_epoch, prog_bar, device, model, optimizer, dl_train, dl_val, wb_run)
 
     # loading best val checkpoint to perform test on it!
     model = load_ckpt(model, best_val_ckpt_path)
