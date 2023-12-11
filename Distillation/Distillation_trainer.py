@@ -202,7 +202,10 @@ def train(args: args, prog_bar: Progress, device, teacher: torch.nn.Module, stud
             running_loss_ce_train += step_loss_ce_train
             step_loss_dice_train = dice_loss.forward(student_logits, gt_batch_train, softmax=True)
             running_loss_dice_train += step_loss_dice_train
-            loss_train = args.alpha * step_loss_ce_train + args.beta * step_loss_dice_train + args.soft_target_loss_weight * soft_targets_loss
+
+            loss_train = (args.alpha * step_loss_ce_train + args.beta * step_loss_dice_train 
+                          + args.soft_target_loss_weight * soft_targets_loss)
+            
             running_loss_train += loss_train
 
             loss_train.backward()
