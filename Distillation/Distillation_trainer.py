@@ -8,6 +8,8 @@ from rich.pretty import pprint
 
 import torch
 
+from torch.cuda import device
+
 from utils.Prints import print_device_name
 from utils.Prints import print_num_trainable_parameters
 from utils.Prints import print_num_parameters
@@ -29,15 +31,18 @@ from scipy.ndimage import zoom
 from utils.Metrics import calculate_dice_metric_per_case
 from utils.Metrics import calculate_jaccard_metric_per_case
 
-from torch.nn.modules.loss import CrossEntropyLoss
+from torch.nn import Module
+from torch.nn.modules import CrossEntropyLoss
 from utils.DiceLoss import DiceLoss
 
 from models.squeezeunet_torch import SqueezeUNet
 from models.vit_seg_modeling import CONFIGS as CONFIGS_ViT_seg
 from models.vit_seg_modeling import VisionTransformer as ViT_seg
 
-from torch.utils.data import Sampler
 import time
+
+from torch.optim import Optimizer
+from torch.optim.lr_scheduler import MultiStepLR
 
 # -----------------------------
 # Models
@@ -104,17 +109,17 @@ def _get_dataset(base_dir, list_dir, split, transform):
         base_dir=base_dir, list_dir=list_dir, split=split, transform=transform
     )
 
-def _get_dataloader(dataset, batch_size, shuffle, num_workers, pin_memory, sampler: Sampler) -> DataLoader:
+def _get_dataloader(dataset, batch_size, shuffle, num_workers, pin_memory) -> DataLoader:
     return DataLoader(
         dataset=dataset, batch_size=batch_size, shuffle=shuffle, 
-        num_workers=num_workers, pin_memory=pin_memory, sampler=sampler
+        num_workers=num_workers, pin_memory=pin_memory
     )
 
 ### --- data --- ###
 
 ### --- optimizer --- ###
 
-def _init_optimizer(args: args, model: torch.nn.Module) -> torch.optim:
+def _init_optimizer(args: args, model: Module) -> Optimizer:
 
     if args.optimizer_type == "Adam":
         return torch.optim.Adam(params=model.parameters(), lr=args.base_lr, weight_decay=args.weight_decay, amsgrad=args.use_amsgrad)
@@ -126,15 +131,34 @@ def _init_optimizer(args: args, model: torch.nn.Module) -> torch.optim:
 
 ### --- optimizer --- ###
 
+### --- learning rate scheduler --- ###
+
+def _init_lr_scheduler(args: args, optimizer: Optimizer) -> MultiStepLR: 
+    
+    if args.use_lr_scheduler == True:
+        if args.optimizer_type == "MultiStepLR":
+            return torch.optim.lr_scheduler.MultiStepLR(
+                optimizer=optimizer, milestones=args.milestones, gamma=args.gamma, 
+                verbose=args.lr_scheduler_verbose
+            )
+        else:
+            raise ValueError(f"{args.lr_scheduler_name} lr scheduler not supported. Supported: MultiStepLR")
+    
+    return None
+
+
+### --- learning rate scheduler --- ###
+
 ### --- Weights and Biases --- ###
 
-def _wandb_init(args: args, model: torch.nn.Module, optimizer: torch.optim):
+def _wandb_init(args: args, model: Module, optimizer: Optimizer, lr_scheduler: MultiStepLR):
 
     wandb_config = args.get_args()
     wandb_config.update(
         {
             "num_trainable_parameters": get_num_trainable_parameters(model),
-            "optimizer": str(optimizer)
+            "optimizer": str(optimizer),
+            "lr_scheduler": str(lr_scheduler)
         }
     )
 
@@ -173,9 +197,12 @@ def _add_val_prog_bar_tasks(args: args, prog_bar: Progress, num_batches_val: int
     return prog_bar_val_batches_task, prog_bar_val_slices_task, prog_bar_val_metrics_task
 
 def train(
-    args: args, prog_bar: Progress, device, teacher: torch.nn.Module, student: torch.nn.Module,
-    optimizer: torch.optim, dl_train: DataLoader, dl_val: DataLoader, wb_run: Run
-) -> None:
+    args: args, prog_bar: Progress, device: device, 
+    teacher: Module, student: Module,
+    optimizer: Optimizer, lr_scheduler: MultiStepLR, 
+    dl_train: DataLoader, dl_val: DataLoader, 
+    wb_run: Run
+) -> str:
     
     max_iterations = args.num_epochs * len(dl_train)
     iter_num = 0
@@ -247,6 +274,8 @@ def train(
             # Calculate the soft targets loss. Scaled by T**2 as 
             # suggested by the authors of the paper "Distilling the knowledge in a neural network"
             step_loss_soft_targets = -torch.sum(soft_targets * soft_prob) / soft_prob.size()[0] * (args.T**2)
+            # Normalize to have value between 0 and 1, in order to have the same scale as the ther loss components
+            step_loss_soft_targets /= args.soft_target_loss_max_value
             running_loss_soft_targets += step_loss_soft_targets
 
             step_loss_ce_train = ce_loss.forward(student_logits, gt_batch_train[:].long())
@@ -264,9 +293,7 @@ def train(
             optimizer.step()
 
             if args.use_lr_scheduler:
-                lr_ = args.base_lr * (1.0 - iter_num / max_iterations) ** 0.9
-                for param_group in optimizer.param_groups:
-                    param_group['lr'] = lr_
+                lr_scheduler.step()
 
             iter_num = iter_num + 1
 
@@ -285,6 +312,7 @@ def train(
                 "loss/ce/train": epoch_loss_ce_train,
                 "loss/softlogits/train": epoch_loss_soft_targets_train,
                 "loss/dice/train": epoch_loss_dice_train,
+                "lr": optimizer.param_groups[0]['lr']
             }
         )
 
@@ -369,7 +397,7 @@ def _add_val_prog_bar_tasks(args: args, prog_bar: Progress, num_batches_val: int
     return prog_bar_val_batches_task, prog_bar_val_slices_task, prog_bar_val_metrics_task
 
 def _validate(
-    inference_type: str, epoch: int, args: args, device, student: torch.nn.Module, dl_val: DataLoader, num_batches_val: int,
+    inference_type: str, epoch: int, args: args, device, student: Module, dl_val: DataLoader, num_batches_val: int,
     prog_bar: Progress, prog_bar_val_batches_task, prog_bar_val_slices_task, prog_bar_val_metrics_task,
     wb_run: Run
 ):
@@ -471,7 +499,7 @@ def _add_test_prog_bar_tasks(args: args, prog_bar: Progress, num_batches_test: i
     return prog_bar_test_batches_task, prog_bar_test_slices_task, prog_bar_test_metrics_task
 
 def _perform_testing(
-    args: args, prog_bar: Progress, device, student: torch.nn.Module, dl_test: DataLoader,
+    args: args, prog_bar: Progress, device, student: Module, dl_test: DataLoader,
     wb_run: Run
 ):
     
@@ -487,7 +515,7 @@ def _perform_testing(
         wb_run
     )
 
-def _test(args: args, prog_bar: Progress, device: torch.cuda.device, model: torch.nn.Module, dl_test: DataLoader, wb_run: Run):
+def _test(args: args, prog_bar: Progress, device: device, model: Module, dl_test: DataLoader, wb_run: Run):
     
     epoch_metric_dice_test, epoch_metric_jaccard_test = _perform_testing(args, prog_bar, device, model, dl_test, wb_run)
     
@@ -529,32 +557,35 @@ def main():
     # optimizer
     optimizer = _init_optimizer(args, student)
 
+    # learning rate scheduler
+    lr_scheduler = _init_lr_scheduler(args, optimizer)
+
     # data
 
     ds_train = _get_dataset(base_dir=args.train_root_path, list_dir=args.list_dir, split="train", transform=args.train_transforms)
-    dl_train = _get_dataloader(
-        ds_train, args.batch_size, False, args.num_workers, 
-        pin_memory=args.pin_memory, sampler=DeterministicSampler(ds_train, seed=seed)
-    )
+    dl_train = _get_dataloader(ds_train, args.batch_size, True, args.num_workers, pin_memory=args.pin_memory)
     # TODO add assert-based sanity check to make sure that sampling is actually the same!
 
     ds_val = _get_dataset(base_dir=args.val_volume_path, list_dir=args.list_dir, split="val_vol", transform=None)
-    dl_val = _get_dataloader(ds_val, 1, False, 1, True, None)
+    dl_val = _get_dataloader(ds_val, 1, False, 1, True)
     
     ds_test = _get_dataset(base_dir=args.test_volume_path, list_dir=args.list_dir, split="test_vol", transform=None)
-    dl_test = _get_dataloader(ds_test, 1, False, 1, True, None)
+    dl_test = _get_dataloader(ds_test, 1, False, 1, True)
     
     print_data_summary(args, ds_train, dl_train, ds_val, dl_val, ds_test, dl_test)
 
     # Weights and Biases
-    wb_run = _wandb_init(args, student, optimizer)
+    wb_run = _wandb_init(args, student, optimizer, lr_scheduler)
 
     # progress
     prog_bar = get_progress_bar()
     prog_bar.start()
 
     # training (and validation!)
-    best_val_ckpt_path = train(args, prog_bar, device, teacher, student, optimizer, dl_train, dl_val, wb_run)
+    best_val_ckpt_path = train(
+        args, prog_bar, device, 
+        teacher, student, optimizer, lr_scheduler, dl_train, dl_val, wb_run
+    )
 
     # loading best val checkpoint to perform test on it!
     model = load_ckpt(student, best_val_ckpt_path)
