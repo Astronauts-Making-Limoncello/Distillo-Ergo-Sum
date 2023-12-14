@@ -21,7 +21,7 @@ from torch.utils.data import DataLoader
 import Distillation_args as args
 from utils.Progress import get_progress_bar
 from utils.Model import get_num_trainable_parameters
-from utils.Checkpointing import save_ckpt, load_ckpt
+from utils.Checkpointing import save_ckpt, load_ckpt, handle_resume_from_ckpt
 import wandb
 from rich.progress import Progress
 import torch.nn as nn
@@ -197,7 +197,7 @@ def _add_val_prog_bar_tasks(args: args, prog_bar: Progress, num_batches_val: int
     return prog_bar_val_batches_task, prog_bar_val_slices_task, prog_bar_val_metrics_task
 
 def train(
-    args: args, prog_bar: Progress, device: device, 
+    args: args, starting_epoch: int, prog_bar: Progress, device: device, 
     teacher: Module, student: Module,
     optimizer: Optimizer, lr_scheduler: MultiStepLR, 
     dl_train: DataLoader, dl_val: DataLoader, 
@@ -236,7 +236,7 @@ def train(
 
     ### --- epoch --- ###
 
-    for epoch in range(1, args.num_epochs + 1):
+    for epoch in range(starting_epoch, starting_epoch + args.num_epochs + 1):
         ### --- train step --- ###
         
         prog_bar.reset(prog_bar_train_batches_task)
@@ -550,15 +550,17 @@ def main():
     # models
     teacher = _init_TransUNet_model(args, device)
     student = _init_SqueezeUNet_model(args, device)
-
-    # checkpoints
-    teacher = load_ckpt(teacher, args.teacher_path)
     
     # optimizer
     optimizer = _init_optimizer(args, student)
 
     # learning rate scheduler
     lr_scheduler = _init_lr_scheduler(args, optimizer)
+
+    # load teacher from pre-trained checkpoint
+    teacher = load_ckpt(teacher, args.teacher_path)
+    # resume student from ckpt, if specified in args
+    starting_epoch, student, optimizer = handle_resume_from_ckpt(args, student, optimizer)
 
     # data
 
@@ -583,7 +585,7 @@ def main():
 
     # training (and validation!)
     best_val_ckpt_path = train(
-        args, prog_bar, device, 
+        args, starting_epoch, prog_bar, device, 
         teacher, student, optimizer, lr_scheduler, dl_train, dl_val, wb_run
     )
 
