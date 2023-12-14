@@ -10,6 +10,7 @@ import torch
 
 from utils.Prints import print_device_name
 from utils.Prints import print_num_trainable_parameters
+from utils.Prints import print_num_parameters
 from utils.Prints import print_data_summary
 from utils.Prints import print_end_of_epoch_summary
 from utils.Prints import print_end_of_test_summary
@@ -31,8 +32,15 @@ from utils.Metrics import calculate_jaccard_metric_per_case
 from torch.nn.modules.loss import CrossEntropyLoss
 from utils.DiceLoss import DiceLoss
 
+from models.squeezeunet_torch import SqueezeUNet
+from models.vit_seg_modeling import CONFIGS as CONFIGS_ViT_seg
+from models.vit_seg_modeling import VisionTransformer as ViT_seg
+
+from torch.utils.data import Sampler
+import time
+
 # -----------------------------
-# Load Checkpoints
+# Models
 # -----------------------------
 
 def load_teacher(args: args, device):
@@ -45,6 +53,46 @@ def load_student(args: args, device):
     print_num_trainable_parameters(student, args.epochs_color)
     return student
 
+def _init_TransUNet_model(args: args, device) -> ViT_seg:
+    config_vit = CONFIGS_ViT_seg[args.vit_name]
+    
+    config_vit.n_classes = args.num_classes
+    
+    config_vit.n_skip = args.n_skip
+    
+    if args.vit_name.find('R50') != -1:
+        config_vit.patches.grid = (int(args.trans_unet_img_size / args.vit_patches_size), int(args.trans_unet_img_size / args.vit_patches_size))
+    
+    model = ViT_seg(config_vit, img_size=args.trans_unet_img_size, num_classes=config_vit.n_classes)
+
+    model = model.to(device)
+
+    if args.trans_unet_freeze_all_params:
+        model.freeze_all_params()
+
+    print_num_parameters(model, args.epochs_color, "\[Teacher]")
+    print_num_trainable_parameters(model, args.epochs_color, "\[Teacher]", "\n")
+
+    return model
+
+
+def _init_SqueezeUNet_model(args: args, device) -> SqueezeUNet:
+    
+    model = SqueezeUNet(
+        num_classes=args.num_classes, 
+        channels_shrink_factor=args.squeeze_unet_channels_shrink_factor
+    )
+    model = model.to(device)
+
+    print_num_parameters(model, args.epochs_color, "\[Student]")
+    print_num_trainable_parameters(model, args.epochs_color, "\[Student]", "\n")
+    
+    return model
+
+### --- model --- ###
+
+################################################################################
+
 # -----------------------------
 # Setup Hyperparameters
 # -----------------------------
@@ -56,10 +104,10 @@ def _get_dataset(base_dir, list_dir, split, transform):
         base_dir=base_dir, list_dir=list_dir, split=split, transform=transform
     )
 
-def _get_dataloader(dataset, batch_size, shuffle, num_workers, pin_memory) -> DataLoader:
+def _get_dataloader(dataset, batch_size, shuffle, num_workers, pin_memory, sampler: Sampler) -> DataLoader:
     return DataLoader(
         dataset=dataset, batch_size=batch_size, shuffle=shuffle, 
-        num_workers=num_workers, pin_memory=pin_memory
+        num_workers=num_workers, pin_memory=pin_memory, sampler=sampler
     )
 
 ### --- data --- ###
@@ -124,8 +172,10 @@ def _add_val_prog_bar_tasks(args: args, prog_bar: Progress, num_batches_val: int
 
     return prog_bar_val_batches_task, prog_bar_val_slices_task, prog_bar_val_metrics_task
 
-def train(args: args, prog_bar: Progress, device, teacher: torch.nn.Module, student: torch.nn.Module,
-          optimizer: torch.optim, dl_train: DataLoader, dl_val: DataLoader, wb_run: Run) -> None:
+def train(
+    args: args, prog_bar: Progress, device, teacher: torch.nn.Module, student: torch.nn.Module,
+    optimizer: torch.optim, dl_train: DataLoader, dl_val: DataLoader, wb_run: Run
+) -> None:
     
     max_iterations = args.num_epochs * len(dl_train)
     iter_num = 0
@@ -151,6 +201,7 @@ def train(args: args, prog_bar: Progress, device, teacher: torch.nn.Module, stud
 
     best_epoch_loss_ce_train = torch.inf
     best_epoch_loss_dice_train = torch.inf
+    best_epoch_loss_soft_targets_train = torch.inf
     best_epoch_loss_train = torch.inf
     
     best_epoch_metric_dice_val = 0
@@ -168,24 +219,23 @@ def train(args: args, prog_bar: Progress, device, teacher: torch.nn.Module, stud
 
         running_loss_ce_train = 0
         running_loss_dice_train = 0
+        running_loss_soft_targets = 0
         running_loss_train = 0
         train_ce_loss_is_best = False
         train_dice_loss_is_best = False
+        train_soft_targets_loss_is_best = False
         train_loss_is_best = False
         val_dice_is_best = False
         val_jaccard_is_best = False
 
         for batch_train in list(dl_train)[:num_batches_train]:
 
-            img_batch_train  = batch_train["image"].to(device)
-            gt_batch_train   = batch_train["label"].to(device)
-            
-            if args.train_transforms is None:
-                img_batch_train = img_batch_train.unsqueeze(1)
+            img_batch_train = batch_train["image"].to(device)
+            gt_batch_train = batch_train["label"].to(device)
             
             optimizer.zero_grad()
 
-            with torch.no_grad:
+            with torch.no_grad():
                 teacher_logits = teacher(img_batch_train)
             
             student_logits = student(img_batch_train)
@@ -196,15 +246,17 @@ def train(args: args, prog_bar: Progress, device, teacher: torch.nn.Module, stud
 
             # Calculate the soft targets loss. Scaled by T**2 as 
             # suggested by the authors of the paper "Distilling the knowledge in a neural network"
-            soft_targets_loss = -torch.sum(soft_targets * soft_prob) / soft_prob.size()[0] * (args.T**2)
+            step_loss_soft_targets = -torch.sum(soft_targets * soft_prob) / soft_prob.size()[0] * (args.T**2)
+            running_loss_soft_targets += step_loss_soft_targets
 
             step_loss_ce_train = ce_loss.forward(student_logits, gt_batch_train[:].long())
             running_loss_ce_train += step_loss_ce_train
             step_loss_dice_train = dice_loss.forward(student_logits, gt_batch_train, softmax=True)
             running_loss_dice_train += step_loss_dice_train
 
-            loss_train = (args.alpha * step_loss_ce_train + args.beta * step_loss_dice_train 
-                          + args.soft_target_loss_weight * soft_targets_loss)
+            loss_train = (
+                args.alpha * step_loss_ce_train + args.beta * step_loss_dice_train + args.soft_target_loss_weight * step_loss_soft_targets
+            )
             
             running_loss_train += loss_train
 
@@ -223,6 +275,7 @@ def train(args: args, prog_bar: Progress, device, teacher: torch.nn.Module, stud
 
         epoch_loss_ce_train = running_loss_ce_train / num_batches_train
         epoch_loss_dice_train = running_loss_dice_train / num_batches_train
+        epoch_loss_soft_targets_train = running_loss_soft_targets / num_batches_train
         epoch_loss_train = running_loss_train / num_batches_train
 
         wb_run.log(
@@ -230,6 +283,7 @@ def train(args: args, prog_bar: Progress, device, teacher: torch.nn.Module, stud
                 "epoch": epoch,
                 "loss/full/train": epoch_loss_train,
                 "loss/ce/train": epoch_loss_ce_train,
+                "loss/softlogits/train": epoch_loss_soft_targets_train,
                 "loss/dice/train": epoch_loss_dice_train,
             }
         )
@@ -240,6 +294,9 @@ def train(args: args, prog_bar: Progress, device, teacher: torch.nn.Module, stud
         if epoch_loss_dice_train < best_epoch_loss_dice_train:
             best_epoch_loss_dice_train = epoch_loss_dice_train
             train_dice_loss_is_best = True
+        if epoch_loss_soft_targets_train < best_epoch_loss_soft_targets_train:
+            best_epoch_loss_soft_targets_train = epoch_loss_soft_targets_train
+            train_soft_targets_loss_is_best = True
         if epoch_loss_train < best_epoch_loss_train:
             best_epoch_loss_train = epoch_loss_train
             train_loss_is_best = True
@@ -283,9 +340,13 @@ def train(args: args, prog_bar: Progress, device, teacher: torch.nn.Module, stud
         ########################################################################
 
         print_end_of_epoch_summary(
+            # general
             args, epoch,
+            # train
             epoch_loss_ce_train, train_ce_loss_is_best,
             epoch_loss_dice_train, train_dice_loss_is_best,
+            epoch_loss_soft_targets_train, train_soft_targets_loss_is_best,
+            # val
             epoch_metric_jaccard_val, val_jaccard_is_best,
             epoch_metric_dice_val, val_dice_is_best
         )
@@ -342,8 +403,8 @@ def _validate(
 
             x, y = slice.shape[0], slice.shape[1]
             
-            if x != args.img_size or y != args.img_size:
-                slice = zoom(slice, (args.img_size / x, args.img_size / y), order=3)
+            if x != args.squeeze_unet_img_size or y != args.squeeze_unet_img_size:
+                slice = zoom(slice, (args.squeeze_unet_img_size / x, args.squeeze_unet_img_size / y), order=3)
 
             input = torch.from_numpy(slice).unsqueeze(0).unsqueeze(0).float().to(device)
 
@@ -353,8 +414,8 @@ def _validate(
                 out = torch.argmax(torch.softmax(outputs, dim=1), dim=1).squeeze(0)
                 out = out.cpu().detach().numpy()
 
-                if x != args.img_size or y != args.img_size:
-                    pred = zoom(out, (x / args.img_size, y / args.img_size), order=0)
+                if x != args.squeeze_unet_img_size or y != args.squeeze_unet_img_size:
+                    pred = zoom(out, (x / args.squeeze_unet_img_size, y / args.squeeze_unet_img_size), order=0)
                 else:
                     pred = out
 
@@ -445,6 +506,10 @@ def _test(args: args, prog_bar: Progress, device: torch.cuda.device, model: torc
 
 def main():
 
+    seed = round(time.time())
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+
     # args
     print(f"Arguments:")
     pprint(args.get_args())
@@ -455,19 +520,30 @@ def main():
     print_device_name(device)
 
     # models
-    teacher = load_teacher(args, device)
-    student = load_student(args, device)
+    teacher = _init_TransUNet_model(args, device)
+    student = _init_SqueezeUNet_model(args, device)
+
+    # checkpoints
+    teacher = load_ckpt(teacher, args.teacher_path)
     
     # optimizer
     optimizer = _init_optimizer(args, student)
 
     # data
+
     ds_train = _get_dataset(base_dir=args.train_root_path, list_dir=args.list_dir, split="train", transform=args.train_transforms)
-    dl_train = _get_dataloader(ds_train, args.batch_size, True, args.num_workers, pin_memory=args.pin_memory)
-    ds_val = _get_dataset(base_dir=args.val_volume_path, list_dir=args.list_dir, split="val_vol", transform=args.val_transforms)
-    dl_val = _get_dataloader(ds_val, 1, False, 1, True)
-    ds_test = _get_dataset(base_dir=args.test_volume_path, list_dir=args.list_dir, split="test_vol", transform=args.test_transforms)
-    dl_test = _get_dataloader(ds_test, 1, False, 1, True)
+    dl_train = _get_dataloader(
+        ds_train, args.batch_size, False, args.num_workers, 
+        pin_memory=args.pin_memory, sampler=DeterministicSampler(ds_train, seed=seed)
+    )
+    # TODO add assert-based sanity check to make sure that sampling is actually the same!
+
+    ds_val = _get_dataset(base_dir=args.val_volume_path, list_dir=args.list_dir, split="val_vol", transform=None)
+    dl_val = _get_dataloader(ds_val, 1, False, 1, True, None)
+    
+    ds_test = _get_dataset(base_dir=args.test_volume_path, list_dir=args.list_dir, split="test_vol", transform=None)
+    dl_test = _get_dataloader(ds_test, 1, False, 1, True, None)
+    
     print_data_summary(args, ds_train, dl_train, ds_val, dl_val, ds_test, dl_test)
 
     # Weights and Biases

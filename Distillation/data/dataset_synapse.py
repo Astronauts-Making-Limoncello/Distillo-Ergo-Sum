@@ -25,7 +25,7 @@ def random_rotate(image, label):
     return image, label
 
 
-class RandomGenerator(object):
+class RandomGenerator(torch.nn.Module):
     def __init__(self, output_size):
         self.output_size = output_size
 
