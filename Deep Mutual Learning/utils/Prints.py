@@ -60,7 +60,7 @@ def print_end_of_epoch_summary(
     args, epoch,
     epoch_loss_ce_train, train_ce_is_best,
     epoch_loss_dice_train, train_dice_is_best,
-    epoch_loss_soft_targets_train, train_soft_targets_is_best,
+    epoch_loss_distill_train, train_distill_is_best,
     epoch_metric_jaccard_val, val_jaccard_is_best,
     epoch_metric_dice_val, val_dice_is_best
 ):
@@ -68,11 +68,44 @@ def print_end_of_epoch_summary(
         f"[b][{args.epochs_color}]{epoch:03d}[/{args.epochs_color}][/b] | train | "
         f"Cross-Entropy loss [b][{args.train_batches_color}]{epoch_loss_ce_train.item():02.6f}[/{args.train_batches_color}][/b] {args.loss_is_best_str if train_ce_is_best else args.loss_is_not_best_str} | "
         f"Dice loss   [b][{args.train_batches_color}]{epoch_loss_dice_train.item():02.6f}[/{args.train_batches_color}][/b] {args.loss_is_best_str if train_dice_is_best else args.loss_is_not_best_str} | "
-        f"Distillation loss [b][{args.train_batches_color}]{epoch_loss_soft_targets_train.item():02.6f}[/{args.train_batches_color}][/b] {args.loss_is_best_str if train_soft_targets_is_best else args.loss_is_not_best_str} |"
+        f"Distillation loss [b][{args.train_batches_color}]{epoch_loss_distill_train.item():02.6f}[/{args.train_batches_color}][/b] {args.loss_is_best_str if train_distill_is_best else args.loss_is_not_best_str} |"
         f"\n"
         f"    | val   | "
         f"Jaccard metric     [b][{args.val_batches_color}]{epoch_metric_jaccard_val:02.6f}[/{args.val_batches_color}][/b] {args.metric_is_best_str if val_jaccard_is_best else args.metric_is_not_best_str} | "
         f"Dice metric [b][{args.val_batches_color}]{epoch_metric_dice_val:02.6f}[/{args.val_batches_color}][/b] {args.metric_is_best_str if val_dice_is_best else args.metric_is_not_best_str} |"
+    )
+
+    if epoch != args.num_epochs:
+        print()
+
+def print_end_of_epoch_summary_mutual(
+    args, epoch,
+    
+    epoch_loss_ce_train_teacher, train_ce_is_best_teacher,
+    epoch_loss_dice_train_teacher, train_dice_is_best_teacher,
+    epoch_loss_distill_train_teacher, train_distill_is_best_teacher,
+    
+    epoch_loss_ce_train_student, train_ce_is_best_student,
+    epoch_loss_dice_train_student, train_dice_is_best_student,
+    epoch_loss_distill_train_student, train_distill_is_best_student,
+    
+    # epoch_metric_jaccard_val, val_jaccard_is_best,
+    # epoch_metric_dice_val, val_dice_is_best
+):
+    print(
+        f"[b][{args.epochs_color}]{epoch:03d}[/{args.epochs_color}][/b] | train | teacher | "
+        f"Cross-Entropy loss [b][{args.train_batches_color}]{epoch_loss_ce_train_teacher.item():02.6f}[/{args.train_batches_color}][/b] {args.loss_is_best_str if train_ce_is_best_teacher else args.loss_is_not_best_str} | "
+        f"Dice loss   [b][{args.train_batches_color}]{epoch_loss_dice_train_teacher.item():02.6f}[/{args.train_batches_color}][/b] {args.loss_is_best_str if train_dice_is_best_teacher else args.loss_is_not_best_str} | "
+        f"Distillation loss [b][{args.train_batches_color}]{epoch_loss_distill_train_teacher.item():02.6f}[/{args.train_batches_color}][/b] {args.loss_is_best_str if train_distill_is_best_teacher else args.loss_is_not_best_str} |"
+        f"\n"
+        f"                   | student | "
+        f"Cross-Entropy loss [b][{args.train_batches_color}]{epoch_loss_ce_train_student.item():02.6f}[/{args.train_batches_color}][/b] {args.loss_is_best_str if train_ce_is_best_student else args.loss_is_not_best_str} | "
+        f"Dice loss   [b][{args.train_batches_color}]{epoch_loss_dice_train_student.item():02.6f}[/{args.train_batches_color}][/b] {args.loss_is_best_str if train_dice_is_best_student else args.loss_is_not_best_str} | "
+        f"Distillation loss [b][{args.train_batches_color}]{epoch_loss_distill_train_student.item():02.6f}[/{args.train_batches_color}][/b] {args.loss_is_best_str if train_distill_is_best_student else args.loss_is_not_best_str} |"
+        f"\n"
+        # f"    | val   | "
+        # f"Jaccard metric     [b][{args.val_batches_color}]{epoch_metric_jaccard_val:02.6f}[/{args.val_batches_color}][/b] {args.metric_is_best_str if val_jaccard_is_best else args.metric_is_not_best_str} | "
+        # f"Dice metric [b][{args.val_batches_color}]{epoch_metric_dice_val:02.6f}[/{args.val_batches_color}][/b] {args.metric_is_best_str if val_dice_is_best else args.metric_is_not_best_str} |"
     )
 
     if epoch != args.num_epochs:

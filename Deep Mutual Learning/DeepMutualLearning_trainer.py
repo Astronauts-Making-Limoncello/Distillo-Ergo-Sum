@@ -34,6 +34,7 @@ from utils.Metrics import calculate_jaccard_metric_per_case
 from torch.nn import Module
 from torch.nn.modules import CrossEntropyLoss
 from utils.DiceLoss import DiceLoss
+from torch.nn.modules import KLDivLoss
 
 from models.squeezeunet_torch import SqueezeUNet
 from models.vit_seg_modeling import CONFIGS as CONFIGS_ViT_seg
@@ -43,6 +44,8 @@ import time
 
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import MultiStepLR
+
+from torch.nn.functional import softmax, log_softmax
 
 # -----------------------------
 # Models
@@ -151,14 +154,22 @@ def _init_lr_scheduler(args: args, optimizer: Optimizer) -> MultiStepLR:
 
 ### --- Weights and Biases --- ###
 
-def _wandb_init(args: args, model: Module, optimizer: Optimizer, lr_scheduler: MultiStepLR):
+def _wandb_init(
+    args: args, 
+    model_teacher: Module, model_student: Module, 
+    optimizer_teacher: Optimizer, optimizer_student: Optimizer, 
+    lr_scheduler_teacher: MultiStepLR, lr_scheduler_student: MultiStepLR
+):
 
     wandb_config = args.get_args()
     wandb_config.update(
         {
-            "num_trainable_parameters": get_num_trainable_parameters(model),
-            "optimizer": str(optimizer),
-            "lr_scheduler": str(lr_scheduler)
+            "num_trainable_parameters_teacher": get_num_trainable_parameters(model_teacher),
+            "num_trainable_parameters_student": get_num_trainable_parameters(model_student),
+            "optimizer_teacher": str(optimizer_teacher),
+            "optimizer_student": str(optimizer_student),
+            "lr_scheduler_teacher": str(lr_scheduler_teacher),
+            "lr_scheduler_student": str(lr_scheduler_student)
         }
     )
 
@@ -167,8 +178,11 @@ def _wandb_init(args: args, model: Module, optimizer: Optimizer, lr_scheduler: M
         config=wandb_config, mode=args.wandb_mode
     )
 
-    if args.wandb_watch_model:
-        wandb_run.watch(model, log='all')
+    if args.wandb_watch_model_teacher:
+        wandb_run.watch(model_teacher, log='all')
+    
+    if args.wandb_watch_model_student:
+        wandb_run.watch(model_student, log='all')
 
     return wandb_run
 
@@ -198,8 +212,9 @@ def _add_val_prog_bar_tasks(args: args, prog_bar: Progress, num_batches_val: int
 
 def train(
     args: args, starting_epoch: int, prog_bar: Progress, device: device, 
-    teacher: Module, student: Module,
-    optimizer: Optimizer, lr_scheduler: MultiStepLR, 
+    model_teacher: Module, model_student: Module,
+    optimizer_teacher: Optimizer, optimizer_student: Optimizer,
+    lr_scheduler_teacher: MultiStepLR, lr_scheduler_student: MultiStepLR, 
     dl_train: DataLoader, dl_val: DataLoader, 
     wb_run: Run
 ) -> str:
@@ -222,17 +237,25 @@ def train(
 
     ce_loss = CrossEntropyLoss()
     dice_loss = DiceLoss(args.num_classes)
+    kl_loss = KLDivLoss(reduction="batchmean")
 
-    teacher.eval()  # Teacher set to evaluation mode
-    student.train() # Student to train mode
+    model_teacher.train()  
+    model_student.train()
 
-    best_epoch_loss_ce_train = torch.inf
-    best_epoch_loss_dice_train = torch.inf
-    best_epoch_loss_soft_targets_train = torch.inf
-    best_epoch_loss_train = torch.inf
+    best_epoch_loss_ce_train_teacher = torch.inf
+    best_epoch_loss_dice_train_teacher = torch.inf
+    best_epoch_loss_distill_train_teacher = torch.inf
+    best_epoch_loss_train_teacher = torch.inf
     
-    best_epoch_metric_dice_val = 0
-    best_epoch_metric_jaccard_val = 0
+    best_epoch_loss_ce_train_student = torch.inf
+    best_epoch_loss_dice_train_student = torch.inf
+    best_epoch_loss_distill_train_student = torch.inf
+    best_epoch_loss_train_student = torch.inf
+    
+    best_epoch_metric_dice_val_teacher = 0
+    best_epoch_metric_dice_val_teacher = 0
+    best_epoch_metric_jaccard_val_student = 0
+    best_epoch_metric_jaccard_val_student = 0
 
     ### --- epoch --- ###
 
@@ -244,97 +267,180 @@ def train(
         prog_bar.reset(prog_bar_val_slices_task)
         prog_bar.reset(prog_bar_val_metrics_task)   
 
-        running_loss_ce_train = 0
-        running_loss_dice_train = 0
-        running_loss_soft_targets = 0
-        running_loss_train = 0
-        train_ce_loss_is_best = False
-        train_dice_loss_is_best = False
-        train_soft_targets_loss_is_best = False
-        train_loss_is_best = False
-        val_dice_is_best = False
-        val_jaccard_is_best = False
+        running_loss_ce_train_teacher = 0
+        running_loss_dice_train_teacher = 0
+        running_loss_distill_train_teacher = 0
+        running_loss_train_teacher = 0
+        running_loss_ce_train_student = 0
+        running_loss_dice_train_student = 0
+        running_loss_distill_train_student = 0
+        running_loss_train_student = 0
+        
+        train_ce_loss_is_best_teacher = False
+        train_dice_loss_is_best_teacher = False
+        train_soft_targets_loss_is_best_teacher = False
+        train_loss_is_best_teacher = False
+        val_dice_is_best_teacher = False
+        val_jaccard_is_best_teacher = False
+        train_ce_loss_is_best_student = False
+        train_dice_loss_is_best_student = False
+        train_soft_targets_loss_is_best_student = False
+        train_loss_is_best_student = False
+        val_dice_is_best_student = False
+        val_jaccard_is_best_student = False
 
         for batch_train in list(dl_train)[:num_batches_train]:
 
             img_batch_train = batch_train["image"].to(device)
             gt_batch_train = batch_train["label"].to(device)
             
-            optimizer.zero_grad()
+            optimizer_teacher.zero_grad()
 
-            teacher_logits = teacher(img_batch_train)
-            student_logits = student(img_batch_train)
+            outputs_teacher = model_teacher(img_batch_train)
+            outputs_student = model_student(img_batch_train)
 
-            #Soften the student logits by applying softmax first and log() second
-            soft_targets = nn.functional.softmax(teacher_logits / args.T, dim=-1)
-            soft_prob = nn.functional.log_softmax(student_logits / args.T, dim=-1)
+            # teacher cross-entropy loss
+            step_loss_ce_train_teacher = ce_loss.forward(outputs_teacher, gt_batch_train[:].long())
+            running_loss_ce_train_teacher += step_loss_ce_train_teacher
 
-            # Calculate the soft targets loss. Scaled by T**2 as 
-            # suggested by the authors of the paper "Distilling the knowledge in a neural network"
-            step_loss_soft_targets = -torch.sum(soft_targets * soft_prob) / soft_prob.size()[0] * (args.T**2)
-            # Normalize to have value between 0 and 1, in order to have the same scale as the ther loss components
-            step_loss_soft_targets /= args.soft_target_loss_max_value
-            running_loss_soft_targets += step_loss_soft_targets
-
-            step_loss_ce_train = ce_loss.forward(student_logits, gt_batch_train[:].long())
-            running_loss_ce_train += step_loss_ce_train
-            step_loss_dice_train = dice_loss.forward(student_logits, gt_batch_train, softmax=True)
-            running_loss_dice_train += step_loss_dice_train
-
-            loss_train = (
-                args.alpha * step_loss_ce_train + args.beta * step_loss_dice_train + args.soft_target_loss_weight * step_loss_soft_targets
-            )
+            # teacher dice loss
+            step_loss_dice_train_teacher = dice_loss.forward(outputs_teacher, gt_batch_train, softmax=True)
+            running_loss_dice_train_teacher += step_loss_dice_train_teacher
             
-            running_loss_train += loss_train
+            # student cross-entropy loss
+            step_loss_ce_train_student = ce_loss.forward(outputs_student, gt_batch_train[:].long())
+            running_loss_ce_train_student += step_loss_ce_train_student
 
-            loss_train.backward()
-            optimizer.step()
+            # student dice loss
+            step_loss_dice_train_student = dice_loss.forward(outputs_student, gt_batch_train, softmax=True)
+            running_loss_dice_train_student += step_loss_dice_train_student
+
+            # teacher distillation loss
+            step_loss_distill_train_teacher = kl_loss.forward(
+                input=log_softmax(outputs_teacher / args.T, dim=-1),
+                target=softmax(outputs_student / args.T, dim=-1).detach()
+            )
+            step_loss_distill_train_teacher *= (args.T**2)
+            step_loss_distill_train_teacher /= args.soft_target_loss_max_value
+            
+            running_loss_distill_train_teacher += step_loss_distill_train_teacher
+            
+            # student distillation loss
+            step_loss_distill_train_student = kl_loss.forward(
+                input=log_softmax(outputs_student / args.T, dim=-1),
+                target=softmax(outputs_teacher / args.T, dim=-1).detach()
+            )
+            step_loss_distill_train_student *= (args.T**2)
+            step_loss_distill_train_student /= args.soft_target_loss_max_value
+            
+            running_loss_distill_train_student += step_loss_distill_train_student
+
+            # full loss teacher
+            loss_train_teacher = (
+                args.alpha * step_loss_ce_train_teacher + \
+                args.beta * step_loss_dice_train_teacher +\
+                args.phi * step_loss_distill_train_teacher
+            )
+            running_loss_train_teacher += loss_train_teacher
+            
+            # full loss student
+            loss_train_student = (
+                args.alpha * step_loss_ce_train_student + \
+                args.beta * step_loss_dice_train_student +\
+                args.phi * step_loss_distill_train_student
+            )
+            running_loss_train_student += loss_train_student
+
+            # GD step teacher
+            loss_train_teacher.backward()
+            optimizer_teacher.step()
+            
+            # GD step teacher
+            loss_train_student.backward()
+            optimizer_student.step()
 
             if args.use_lr_scheduler:
-                lr_scheduler.step()
+                lr_scheduler_teacher.step()
+                lr_scheduler_student.step()
 
             iter_num = iter_num + 1
 
             prog_bar.advance(prog_bar_train_batches_task, 1)
             prog_bar.advance(prog_bar_epochs_task, 1 / (num_batches_train))
 
-        epoch_loss_ce_train = running_loss_ce_train / num_batches_train
-        epoch_loss_dice_train = running_loss_dice_train / num_batches_train
-        epoch_loss_soft_targets_train = running_loss_soft_targets / num_batches_train
-        epoch_loss_train = running_loss_train / num_batches_train
+        epoch_loss_ce_train_teacher = running_loss_ce_train_teacher / num_batches_train
+        epoch_loss_dice_train_teacher = running_loss_dice_train_teacher / num_batches_train
+        epoch_loss_distill_train_teacher = running_loss_distill_train_teacher / num_batches_train
+        epoch_loss_train_teacher = running_loss_train_teacher / num_batches_train
+        
+        epoch_loss_ce_train_student = running_loss_ce_train_student / num_batches_train
+        epoch_loss_dice_train_student = running_loss_dice_train_student / num_batches_train
+        epoch_loss_distill_train_student = running_loss_distill_train_student / num_batches_train
+        epoch_loss_train_student = running_loss_train_student / num_batches_train
 
         wb_run.log(
             {
                 "epoch": epoch,
-                "loss/full/train": epoch_loss_train,
-                "loss/ce/train": epoch_loss_ce_train,
-                "loss/softlogits/train": epoch_loss_soft_targets_train,
-                "loss/dice/train": epoch_loss_dice_train,
-                "hyperparameters/lr": optimizer.param_groups[0]['lr']
+                
+                "teacher/loss/full/train": epoch_loss_train_teacher,
+                "teacher/loss/ce/train": epoch_loss_ce_train_teacher,
+                "teacher/loss/softlogits/train": epoch_loss_distill_train_teacher,
+                "teacher/loss/dice/train": epoch_loss_dice_train_teacher,
+                "teacher/hyperparameters/lr": optimizer_teacher.param_groups[0]['lr'],
+                
+                "student/loss/full/train": epoch_loss_train_student,
+                "student/loss/ce/train": epoch_loss_ce_train_student,
+                "student/loss/softlogits/train": epoch_loss_distill_train_student,
+                "student/loss/dice/train": epoch_loss_dice_train_student,
+                "student/hyperparameters/lr": optimizer_student.param_groups[0]['lr']
             }
         )
 
-        if epoch_loss_ce_train < best_epoch_loss_ce_train:
-            best_epoch_loss_ce_train = epoch_loss_ce_train
-            train_ce_loss_is_best = True
-        if epoch_loss_dice_train < best_epoch_loss_dice_train:
-            best_epoch_loss_dice_train = epoch_loss_dice_train
-            train_dice_loss_is_best = True
-        if epoch_loss_soft_targets_train < best_epoch_loss_soft_targets_train:
-            best_epoch_loss_soft_targets_train = epoch_loss_soft_targets_train
-            train_soft_targets_loss_is_best = True
-        if epoch_loss_train < best_epoch_loss_train:
-            best_epoch_loss_train = epoch_loss_train
-            train_loss_is_best = True
+        if epoch_loss_ce_train_teacher < best_epoch_loss_ce_train_teacher:
+            best_epoch_loss_ce_train_teacher = epoch_loss_ce_train_teacher
+            train_ce_loss_is_best_teacher = True
+        if epoch_loss_dice_train_teacher < best_epoch_loss_dice_train_teacher:
+            best_epoch_loss_dice_train_teacher = epoch_loss_dice_train_teacher
+            train_dice_loss_is_best_teacher = True
+        if epoch_loss_distill_train_teacher < best_epoch_loss_distill_train_teacher:
+            best_epoch_loss_distill_train_teacher = epoch_loss_distill_train_teacher
+            train_distill_loss_is_best_teacher = True
+        if epoch_loss_train_teacher < best_epoch_loss_train_teacher:
+            best_epoch_loss_train_teacher = epoch_loss_train_teacher
+            train_loss_is_best_teacher = True
 
-        if train_ce_loss_is_best:
-            save_ckpt(student, optimizer, epoch, args.get_args(), f"{args.checkpoint_dir}/ckpt_train_best_ce_loss.pth")
-        if train_dice_loss_is_best:
-            save_ckpt(student, optimizer, epoch, args.get_args(), f"{args.checkpoint_dir}/ckpt_train_best_dice_loss.pth")
-        if train_loss_is_best:
-            save_ckpt(student, optimizer, epoch, args.get_args(), f"{args.checkpoint_dir}/ckpt_train_best_loss.pth")
+        if train_ce_loss_is_best_teacher:
+            save_ckpt(model_student, optimizer_teacher, epoch, args.get_args(), f"{args.checkpoint_dir}/teacher_ckpt_train_best_ce_loss.pth")
+        if train_dice_loss_is_best_teacher:
+            save_ckpt(model_student, optimizer_teacher, epoch, args.get_args(), f"{args.checkpoint_dir}/teacher_ckpt_train_best_dice_loss.pth")
+        if train_loss_is_best_teacher:
+            save_ckpt(model_student, optimizer_teacher, epoch, args.get_args(), f"{args.checkpoint_dir}/teacher_ckpt_train_best_loss.pth")
         if epoch % args.log_every_n_epochs == 0:
-            save_ckpt(student, optimizer, epoch, args.get_args(), f"{args.checkpoint_dir}/ckpt_epoch_{epoch}.pth")
+            save_ckpt(model_student, optimizer_teacher, epoch, args.get_args(), f"{args.checkpoint_dir}/teacher_ckpt_epoch_{epoch}.pth")
+        
+        if epoch_loss_ce_train_student < best_epoch_loss_ce_train_student:
+            best_epoch_loss_ce_train_student = epoch_loss_ce_train_student
+            train_ce_loss_is_best_student = True
+        if epoch_loss_dice_train_student < best_epoch_loss_dice_train_student:
+            best_epoch_loss_dice_train_student = epoch_loss_dice_train_student
+            train_dice_loss_is_best_student = True
+        if epoch_loss_distill_train_student < best_epoch_loss_distill_train_student:
+            best_epoch_loss_distill_train_student = epoch_loss_distill_train_student
+            train_distill_loss_is_best_student = True
+        if epoch_loss_train_student < best_epoch_loss_train_student:
+            best_epoch_loss_train_student = epoch_loss_train_student
+            train_loss_is_best_student = True
+
+        if train_ce_loss_is_best_student:
+            save_ckpt(model_student, optimizer_student, epoch, args.get_args(), f"{args.checkpoint_dir}/student_ckpt_train_best_ce_loss.pth")
+        if train_dice_loss_is_best_student:
+            save_ckpt(model_student, optimizer_student, epoch, args.get_args(), f"{args.checkpoint_dir}/student_ckpt_train_best_dice_loss.pth")
+        if train_distill_loss_is_best_student:
+            save_ckpt(model_student, optimizer_student, epoch, args.get_args(), f"{args.checkpoint_dir}/student_ckpt_train_best_distill_loss.pth")
+        if train_loss_is_best_student:
+            save_ckpt(model_student, optimizer_student, epoch, args.get_args(), f"{args.checkpoint_dir}/student_ckpt_train_best_loss.pth")
+        if epoch % args.log_every_n_epochs == 0:
+            save_ckpt(model_student, optimizer_student, epoch, args.get_args(), f"{args.checkpoint_dir}/student_ckpt_epoch_{epoch}.pth")
         
         ### --- train step --- ###
 
@@ -342,24 +448,24 @@ def train(
 
         ### --- validation step --- ###
 
-        epoch_metric_dice_val, epoch_metric_jaccard_val = _validate(
-            "val", epoch, args, device, student, dl_val, num_batches_val,
-            prog_bar, prog_bar_val_batches_task, prog_bar_val_slices_task, prog_bar_val_metrics_task,
-            wb_run
-        )
+        # epoch_metric_dice_val, epoch_metric_jaccard_val = _validate(
+        #     "val", epoch, args, device, student, dl_val, num_batches_val,
+        #     prog_bar, prog_bar_val_batches_task, prog_bar_val_slices_task, prog_bar_val_metrics_task,
+        #     wb_run
+        # )
 
-        if epoch_metric_dice_val > best_epoch_metric_dice_val:
-            best_epoch_metric_dice_val = epoch_metric_dice_val
-            val_dice_is_best = True
-        if epoch_metric_jaccard_val > best_epoch_metric_jaccard_val:
-            best_epoch_metric_jaccard_val = epoch_metric_jaccard_val
-            val_jaccard_is_best = True
+        # if epoch_metric_dice_val > best_epoch_metric_dice_val:
+        #     best_epoch_metric_dice_val = epoch_metric_dice_val
+        #     val_dice_is_best = True
+        # if epoch_metric_jaccard_val > best_epoch_metric_jaccard_val:
+        #     best_epoch_metric_jaccard_val = epoch_metric_jaccard_val
+        #     val_jaccard_is_best = True
 
-        if val_dice_is_best:
-            best_val_ckpt_path = f"{args.checkpoint_dir}/ckpt_val_best_dice_loss.pth"
-            save_ckpt(student, optimizer, epoch, args.get_args(), best_val_ckpt_path)
-        if val_jaccard_is_best:
-            save_ckpt(student, optimizer, epoch, args.get_args(), f"{args.checkpoint_dir}/ckpt_val_best_jaccard_loss.pth")
+        # if val_dice_is_best:
+        #     best_val_ckpt_path = f"{args.checkpoint_dir}/ckpt_val_best_dice_loss.pth"
+        #     save_ckpt(student, optimizer, epoch, args.get_args(), best_val_ckpt_path)
+        # if val_jaccard_is_best:
+        #     save_ckpt(student, optimizer, epoch, args.get_args(), f"{args.checkpoint_dir}/ckpt_val_best_jaccard_loss.pth")
 
         ### --- validation step --- ###
 
@@ -368,18 +474,26 @@ def train(
         print_end_of_epoch_summary(
             # general
             args, epoch,
-            # train
-            epoch_loss_ce_train, train_ce_loss_is_best,
-            epoch_loss_dice_train, train_dice_loss_is_best,
-            epoch_loss_soft_targets_train, train_soft_targets_loss_is_best,
+            
+            # train teacher
+            epoch_loss_ce_train_teacher, train_ce_loss_is_best_teacher,
+            epoch_loss_dice_train_teacher, train_dice_loss_is_best_teacher,
+            epoch_loss_distill_train_teacher, train_distill_loss_is_best_teacher,
+            
+            # train student
+            epoch_loss_ce_train_student, train_ce_loss_is_best_student,
+            epoch_loss_dice_train_student, train_dice_loss_is_best_student,
+            epoch_loss_distill_train_student, train_distill_loss_is_best_student,
+            
             # val
-            epoch_metric_jaccard_val, val_jaccard_is_best,
-            epoch_metric_dice_val, val_dice_is_best
+            # epoch_metric_jaccard_val, val_jaccard_is_best,
+            # epoch_metric_dice_val, val_dice_is_best
         )
 
         prog_bar.update(task_id=prog_bar_epochs_task, total=args.num_epochs)
 
-    return best_val_ckpt_path
+    # return best_val_ckpt_path
+    return ""
 
 ### --- training --- ###
 
@@ -546,22 +660,18 @@ def main():
     print_device_name(device)
 
     # models
-    teacher = _init_TransUNet_model(args, device)
-    student = _init_SqueezeUNet_model(args, device)
+    model_teacher = _init_TransUNet_model(args, device)
+    model_student = _init_SqueezeUNet_model(args, device)
     
     # optimizer
-    optimizer = _init_optimizer(args, student)
+    optimizer_teacher = _init_optimizer(args, model_teacher)
+    optimizer_student = _init_optimizer(args, model_student)
 
     # learning rate scheduler
-    lr_scheduler = _init_lr_scheduler(args, optimizer)
-
-    # load teacher from pre-trained checkpoint
-    teacher = load_ckpt(teacher, args.teacher_path)
-    # resume student from ckpt, if specified in args
-    starting_epoch, student, optimizer = handle_resume_from_ckpt(args, student, optimizer)
+    lr_scheduler_teacher = _init_lr_scheduler(args, optimizer_teacher)
+    lr_scheduler_student = _init_lr_scheduler(args, optimizer_student)
 
     # data
-
     ds_train = _get_dataset(base_dir=args.train_root_path, list_dir=args.list_dir, split="train", transform=args.train_transforms)
     dl_train = _get_dataloader(ds_train, args.batch_size, True, args.num_workers, pin_memory=args.pin_memory)
     # TODO add assert-based sanity check to make sure that sampling is actually the same!
@@ -575,7 +685,11 @@ def main():
     print_data_summary(args, ds_train, dl_train, ds_val, dl_val, ds_test, dl_test)
 
     # Weights and Biases
-    wb_run = _wandb_init(args, student, optimizer, lr_scheduler)
+    wb_run = _wandb_init(
+        args, 
+        model_teacher, model_student, optimizer_teacher, optimizer_student,  
+        lr_scheduler_teacher, lr_scheduler_student
+    )
 
     # progress
     prog_bar = get_progress_bar()
@@ -583,9 +697,15 @@ def main():
 
     # training (and validation!)
     best_val_ckpt_path = train(
-        args, starting_epoch, prog_bar, device, 
-        teacher, student, optimizer, lr_scheduler, dl_train, dl_val, wb_run
+        args, 1, prog_bar, device, 
+        model_teacher, model_student, 
+        optimizer_teacher, optimizer_student, 
+        lr_scheduler_teacher, lr_scheduler_student,
+        dl_train, dl_val, wb_run
     )
+    
+    print(f"TODO implement test with support for teacher and student both!")
+    exit()
 
     # loading best val checkpoint to perform test on it!
     model = load_ckpt(student, best_val_ckpt_path)
