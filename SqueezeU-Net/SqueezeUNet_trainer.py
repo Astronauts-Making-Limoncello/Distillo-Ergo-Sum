@@ -45,6 +45,9 @@ from utilities.Metrics import calculate_jaccard_metric_per_case
 
 from utilities.Prints import print_end_of_test_summary
 
+from torch.optim import Optimizer
+from torch.optim.lr_scheduler import MultiStepLR
+
 ### --- model --- ###
 
 def _init_model(args: args, device) -> SqueezeUNet:
@@ -78,6 +81,24 @@ def _init_optimizer(args: args, model: torch.nn.Module) -> torch.optim:
 
 ### --- optimizer --- ###
 
+### --- learning rate scheduler --- ###
+
+def _init_lr_scheduler(args: args, optimizer: Optimizer) -> MultiStepLR: 
+    
+    if args.use_lr_scheduler == True:
+        if args.optimizer_type == "MultiStepLR":
+            return torch.optim.lr_scheduler.MultiStepLR(
+                optimizer=optimizer, milestones=args.milestones, gamma=args.gamma, 
+                verbose=args.lr_scheduler_verbose
+            )
+        else:
+            raise ValueError(f"{args.lr_scheduler_name} lr scheduler not supported. Supported: MultiStepLR")
+    
+    return None
+
+
+### --- learning rate scheduler --- ###
+
 ################################################################################
 
 ### --- data --- ###
@@ -99,13 +120,14 @@ def _get_dataloader(dataset, batch_size, shuffle, num_workers, pin_memory) -> Da
 
 ### --- Weights and Biases --- ###
 
-def _wandb_init(args: args, model: torch.nn.Module, optimizer: torch.optim):
+def _wandb_init(args: args, model: torch.nn.Module, optimizer: torch.optim, lr_scheduler: MultiStepLR):
 
     wandb_config = args.get_args()
     wandb_config.update(
         {
             "num_trainable_parameters": get_num_trainable_parameters(model),
-            "optimizer": str(optimizer)
+            "optimizer": str(optimizer),
+            "lr_scheduler": str(lr_scheduler)
         }
     )
 
@@ -136,7 +158,7 @@ def _add_train_prog_bar_tasks(args: args, prog_bar: Progress, num_batches_train:
 
 def _train(
     args: args, starting_epoch: int, prog_bar: Progress, device, model: torch.nn.Module, 
-    optimizer: torch.optim.SGD, dl_train: DataLoader, dl_val: DataLoader,
+    optimizer: torch.optim.SGD, lr_scheduler: MultiStepLR, dl_train: DataLoader, dl_val: DataLoader,
     wb_run: Run
 ):
 
@@ -210,9 +232,7 @@ def _train(
             optimizer.step()
             
             if args.use_lr_scheduler:
-                lr_ = args.base_lr * (1.0 - iter_num / max_iterations) ** 0.9
-                for param_group in optimizer.param_groups:
-                    param_group['lr'] = lr_
+                lr_scheduler.step()
 
             iter_num = iter_num + 1
 
@@ -229,6 +249,7 @@ def _train(
                 "loss/full/train": epoch_loss_train,
                 "loss/ce/train": epoch_loss_ce_train,
                 "loss/dice/train": epoch_loss_dice_train,
+                "hyperparameters/lr": optimizer.param_groups[0]['lr']
             }
         )
 
@@ -243,13 +264,25 @@ def _train(
             train_loss_is_best = True
 
         if train_ce_loss_is_best:
-            save_ckpt(model, optimizer, epoch, args.get_args(), f"{args.checkpoint_dir}/ckpt_train_best_ce_loss.pth")
+            save_ckpt(
+                model, optimizer, lr_scheduler if args.use_lr_scheduler else None,  
+                epoch, args.get_args(), f"{args.checkpoint_dir}/ckpt_train_best_ce_loss.pth"
+            )
         if train_dice_loss_is_best:
-            save_ckpt(model, optimizer, epoch, args.get_args(), f"{args.checkpoint_dir}/ckpt_train_best_dice_loss.pth")
+            save_ckpt(
+                model, optimizer, lr_scheduler if args.use_lr_scheduler else None,  
+                epoch, args.get_args(), f"{args.checkpoint_dir}/ckpt_train_best_dice_loss.pth"
+            )
         if train_loss_is_best:
-            save_ckpt(model, optimizer, epoch, args.get_args(), f"{args.checkpoint_dir}/ckpt_train_best_loss.pth")
+            save_ckpt(
+                model, optimizer, lr_scheduler if args.use_lr_scheduler else None,  
+                epoch, args.get_args(), f"{args.checkpoint_dir}/ckpt_train_best_loss.pth"
+            )
         if epoch % args.log_every_n_epochs == 0:
-            save_ckpt(model, optimizer, epoch, args.get_args(), f"{args.checkpoint_dir}/ckpt_epoch_{epoch}.pth")
+            save_ckpt(
+                model, optimizer, lr_scheduler if args.use_lr_scheduler else None,  
+                epoch, args.get_args(), f"{args.checkpoint_dir}/ckpt_epoch_{epoch}.pth"
+            )
         
         ### --- train step --- ###
         
@@ -272,9 +305,15 @@ def _train(
 
         if val_dice_is_best:
             best_val_ckpt_path = f"{args.checkpoint_dir}/ckpt_val_best_dice_loss.pth"
-            save_ckpt(model, optimizer, epoch, args.get_args(), best_val_ckpt_path)
+            save_ckpt(
+                model, optimizer, lr_scheduler if args.use_lr_scheduler else None, 
+                epoch, args.get_args(), best_val_ckpt_path
+            )
         if val_jaccard_is_best:
-            save_ckpt(model, optimizer, epoch, args.get_args(), f"{args.checkpoint_dir}/ckpt_val_best_jaccard_loss.pth")
+            save_ckpt(
+                model, optimizer, lr_scheduler if args.use_lr_scheduler else None, 
+                epoch, args.get_args(), f"{args.checkpoint_dir}/ckpt_val_best_jaccard_loss.pth"
+            )
 
         ### --- validation step --- ###
 
@@ -459,8 +498,11 @@ def main():
     # optimizer
     optimizer = _init_optimizer(args, model)
 
+    # learning rate scheduler
+    lr_scheduler = _init_lr_scheduler(args, optimizer)
+
     # resume from ckpt, if specified in args
-    starting_epoch, model, optimizer = handle_resume_from_ckpt(args, model, optimizer)
+    starting_epoch, model, optimizer, lr_scheduler = handle_resume_from_ckpt(args, model, optimizer, lr_scheduler)
 
     # data
     ds_train = _get_dataset(base_dir=args.train_root_path, list_dir=args.list_dir, split="train", transform=args.train_transforms)
@@ -472,14 +514,14 @@ def main():
     print_data_summary(args, ds_train, dl_train, ds_val, dl_val, ds_test, dl_test)
 
     # Weights and Biases
-    wb_run = _wandb_init(args, model, optimizer)
+    wb_run = _wandb_init(args, model, optimizer, lr_scheduler)
 
     # progress
     prog_bar = get_progress_bar()
     prog_bar.start()
 
     # training (and validation!)
-    best_val_ckpt_path = _train(args, starting_epoch, prog_bar, device, model, optimizer, dl_train, dl_val, wb_run)
+    best_val_ckpt_path = _train(args, starting_epoch, prog_bar, device, model, optimizer, lr_scheduler, dl_train, dl_val, wb_run)
 
     # loading best val checkpoint to perform test on it!
     model = load_ckpt(model, best_val_ckpt_path)
