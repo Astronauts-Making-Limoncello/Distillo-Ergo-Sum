@@ -89,8 +89,11 @@ def print_end_of_epoch_summary_mutual(
     epoch_loss_dice_train_student, train_dice_is_best_student,
     epoch_loss_distill_train_student, train_distill_is_best_student,
     
-    # epoch_metric_jaccard_val, val_jaccard_is_best,
-    # epoch_metric_dice_val, val_dice_is_best
+    epoch_metric_jaccard_val_teacher, val_jaccard_is_best_teacher,
+    epoch_metric_dice_val_teacher, val_dice_is_best_teacher,
+    
+    epoch_metric_jaccard_val_student, val_jaccard_is_best_student,
+    epoch_metric_dice_val_student, val_dice_is_best_student
 ):
     print(
         f"[b][{args.epochs_color}]{epoch:03d}[/{args.epochs_color}][/b] | train | teacher | "
@@ -103,9 +106,13 @@ def print_end_of_epoch_summary_mutual(
         f"Dice loss   [b][{args.train_batches_color}]{epoch_loss_dice_train_student.item():02.6f}[/{args.train_batches_color}][/b] {args.loss_is_best_str if train_dice_is_best_student else args.loss_is_not_best_str} | "
         f"Distillation loss [b][{args.train_batches_color}]{epoch_loss_distill_train_student.item():02.6f}[/{args.train_batches_color}][/b] {args.loss_is_best_str if train_distill_is_best_student else args.loss_is_not_best_str} |"
         f"\n"
-        # f"    | val   | "
-        # f"Jaccard metric     [b][{args.val_batches_color}]{epoch_metric_jaccard_val:02.6f}[/{args.val_batches_color}][/b] {args.metric_is_best_str if val_jaccard_is_best else args.metric_is_not_best_str} | "
-        # f"Dice metric [b][{args.val_batches_color}]{epoch_metric_dice_val:02.6f}[/{args.val_batches_color}][/b] {args.metric_is_best_str if val_dice_is_best else args.metric_is_not_best_str} |"
+        f"    | val   | teacher | "
+        f"Jaccard metric     [b][{args.val_batches_color}]{epoch_metric_jaccard_val_teacher:02.6f}[/{args.val_batches_color}][/b] {args.metric_is_best_str if val_jaccard_is_best_teacher else args.metric_is_not_best_str} | "
+        f"Dice metric [b][{args.val_batches_color}]{epoch_metric_dice_val_teacher:02.6f}[/{args.val_batches_color}][/b] {args.metric_is_best_str if val_dice_is_best_teacher else args.metric_is_not_best_str} |"
+        f"\n"
+        f"            | student | "
+        f"Jaccard metric     [b][{args.val_batches_color}]{epoch_metric_jaccard_val_student:02.6f}[/{args.val_batches_color}][/b] {args.metric_is_best_str if val_jaccard_is_best_student else args.metric_is_not_best_str} | "
+        f"Dice metric [b][{args.val_batches_color}]{epoch_metric_dice_val_student:02.6f}[/{args.val_batches_color}][/b] {args.metric_is_best_str if val_dice_is_best_student else args.metric_is_not_best_str} |"
     )
 
     if epoch != args.num_epochs:
@@ -118,17 +125,15 @@ def print_end_of_epoch_summary_mutual(
 ### --- test --- ###
 
 def print_end_of_test_summary(
-        args, 
+        args, role,
         epoch_metric_jaccard_test, test_jaccard_is_best,
         epoch_metric_dice_test, test_dice_is_best
     ):
 
     print(
-        f"    | test  | "
+        f"    | test  | {role} | "
         f"Jaccard metric     [b][{args.test_batches_color}]{epoch_metric_jaccard_test:02.6f}[/{args.test_batches_color}][/b] {args.metric_is_best_str if test_jaccard_is_best else args.metric_is_not_best_str} | "
         f"Dice metric [b][{args.test_batches_color}]{epoch_metric_dice_test:02.6f}[/{args.test_batches_color}][/b] {args.metric_is_best_str if test_dice_is_best else args.metric_is_not_best_str} |"
     )
-
-    print()
 
 ################################################################################

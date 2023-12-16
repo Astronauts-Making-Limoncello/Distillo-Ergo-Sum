@@ -254,13 +254,13 @@ def train(
     best_epoch_loss_train_student = torch.inf
     
     best_epoch_metric_dice_val_teacher = 0
-    best_epoch_metric_dice_val_teacher = 0
-    best_epoch_metric_jaccard_val_student = 0
+    best_epoch_metric_dice_val_student = 0
+    best_epoch_metric_jaccard_val_teacher = 0
     best_epoch_metric_jaccard_val_student = 0
 
     ### --- epoch --- ###
 
-    for epoch in range(starting_epoch, starting_epoch + args.num_epochs + 1):
+    for epoch in range(starting_epoch, starting_epoch + args.num_epochs):
         ### --- train step --- ###
         
         prog_bar.reset(prog_bar_train_batches_task)
@@ -449,24 +449,43 @@ def train(
 
         ### --- validation step --- ###
 
-        # epoch_metric_dice_val, epoch_metric_jaccard_val = _validate(
-        #     "val", epoch, args, device, student, dl_val, num_batches_val,
-        #     prog_bar, prog_bar_val_batches_task, prog_bar_val_slices_task, prog_bar_val_metrics_task,
-        #     wb_run
-        # )
+        epoch_metric_dice_val_teacher, epoch_metric_jaccard_val_teacher = _validate(
+            "val", epoch, args, device, model_teacher, dl_val, num_batches_val,
+            prog_bar, prog_bar_val_batches_task, prog_bar_val_slices_task, prog_bar_val_metrics_task,
+            wb_run
+        )
 
-        # if epoch_metric_dice_val > best_epoch_metric_dice_val:
-        #     best_epoch_metric_dice_val = epoch_metric_dice_val
-        #     val_dice_is_best = True
-        # if epoch_metric_jaccard_val > best_epoch_metric_jaccard_val:
-        #     best_epoch_metric_jaccard_val = epoch_metric_jaccard_val
-        #     val_jaccard_is_best = True
+        if epoch_metric_dice_val_teacher > best_epoch_metric_dice_val_teacher:
+            best_epoch_metric_dice_val_teacher = epoch_metric_dice_val_teacher
+            val_dice_is_best_teacher = True
+        if epoch_metric_jaccard_val_teacher > best_epoch_metric_jaccard_val_teacher:
+            best_epoch_metric_jaccard_val_teacher = epoch_metric_jaccard_val_teacher
+            val_jaccard_is_best_teacher = True
 
-        # if val_dice_is_best:
-        #     best_val_ckpt_path = f"{args.checkpoint_dir}/ckpt_val_best_dice_loss.pth"
-        #     save_ckpt(student, optimizer, epoch, args.get_args(), best_val_ckpt_path)
-        # if val_jaccard_is_best:
-        #     save_ckpt(student, optimizer, epoch, args.get_args(), f"{args.checkpoint_dir}/ckpt_val_best_jaccard_loss.pth")
+        if val_dice_is_best_teacher:
+            best_val_ckpt_path_teacher = f"{args.checkpoint_dir}/teacher_ckpt_val_best_dice_loss.pth"
+            save_ckpt(model_teacher, optimizer_teacher, epoch, args.get_args(), best_val_ckpt_path_teacher)
+        if val_jaccard_is_best_teacher:
+            save_ckpt(model_teacher, optimizer_teacher, epoch, args.get_args(), f"{args.checkpoint_dir}/teacher_ckpt_val_best_jaccard_loss.pth")
+        
+        epoch_metric_dice_val_student, epoch_metric_jaccard_val_student = _validate(
+            "val", epoch, args, device, model_student, dl_val, num_batches_val,
+            prog_bar, prog_bar_val_batches_task, prog_bar_val_slices_task, prog_bar_val_metrics_task,
+            wb_run
+        )
+
+        if epoch_metric_dice_val_student > best_epoch_metric_dice_val_student:
+            best_epoch_metric_dice_val_student = epoch_metric_dice_val_student
+            val_dice_is_best_student = True
+        if epoch_metric_jaccard_val_student > best_epoch_metric_jaccard_val_student:
+            best_epoch_metric_jaccard_val_student = epoch_metric_jaccard_val_student
+            val_jaccard_is_best_student = True
+
+        if val_dice_is_best_student:
+            best_val_ckpt_path_student = f"{args.checkpoint_dir}/student_ckpt_val_best_dice_loss.pth"
+            save_ckpt(model_student, optimizer_student, epoch, args.get_args(), best_val_ckpt_path_student)
+        if val_jaccard_is_best_student:
+            save_ckpt(model_student, optimizer_student, epoch, args.get_args(), f"{args.checkpoint_dir}/student_ckpt_val_best_jaccard_loss.pth")
 
         ### --- validation step --- ###
 
@@ -486,15 +505,18 @@ def train(
             epoch_loss_dice_train_student, train_dice_loss_is_best_student,
             epoch_loss_distill_train_student, train_distill_loss_is_best_student,
             
-            # val
-            # epoch_metric_jaccard_val, val_jaccard_is_best,
-            # epoch_metric_dice_val, val_dice_is_best
+            # val teacher
+            epoch_metric_jaccard_val_teacher, val_jaccard_is_best_teacher,
+            epoch_metric_dice_val_teacher, val_dice_is_best_teacher,
+            
+            # val student
+            epoch_metric_jaccard_val_student, val_jaccard_is_best_student,
+            epoch_metric_dice_val_student, val_dice_is_best_student
         )
 
         prog_bar.update(task_id=prog_bar_epochs_task, total=args.num_epochs)
 
-    # return best_val_ckpt_path
-    return ""
+    return best_val_ckpt_path_teacher, best_val_ckpt_path_student
 
 ### --- training --- ###
 
@@ -628,12 +650,12 @@ def _perform_testing(
         wb_run
     )
 
-def _test(args: args, prog_bar: Progress, device: device, model: Module, dl_test: DataLoader, wb_run: Run):
+def _test(args: args, prog_bar: Progress, device: device, model: Module, dl_test: DataLoader, wb_run: Run, role: str):
     
     epoch_metric_dice_test, epoch_metric_jaccard_test = _perform_testing(args, prog_bar, device, model, dl_test, wb_run)
     
     print_end_of_test_summary(
-        args, 
+        args, role,
         epoch_metric_jaccard_test, True,
         epoch_metric_dice_test, True
     )
@@ -697,20 +719,19 @@ def main():
     prog_bar.start()
 
     # training (and validation!)
-    best_val_ckpt_path = train(
+    best_val_ckpt_path_teacher, best_val_ckpt_path_student = train(
         args, 1, prog_bar, device, 
         model_teacher, model_student, 
         optimizer_teacher, optimizer_student, 
         lr_scheduler_teacher, lr_scheduler_student,
         dl_train, dl_val, wb_run
     )
-    
-    print(f"TODO implement test with support for teacher and student both!")
-    exit()
 
     # loading best val checkpoint to perform test on it!
-    model = load_ckpt(student, best_val_ckpt_path)
-    _test(args, prog_bar, device, model, dl_test, wb_run)
+    model_teacher = load_ckpt(model_teacher, best_val_ckpt_path_teacher)
+    _test(args, prog_bar, device, model_teacher, dl_test, wb_run, "teacher")
+    model_student = load_ckpt(model_student, best_val_ckpt_path_student)
+    _test(args, prog_bar, device, model_student, dl_test, wb_run, "student")
 
 
 if __name__ == "__main__":
