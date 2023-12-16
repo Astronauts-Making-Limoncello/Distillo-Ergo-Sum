@@ -310,7 +310,7 @@ def train(
                 "loss/ce/train": epoch_loss_ce_train,
                 "loss/softlogits/train": epoch_loss_soft_targets_train,
                 "loss/dice/train": epoch_loss_dice_train,
-                "lr": optimizer.param_groups[0]['lr']
+                "hyperparameters/lr": optimizer.param_groups[0]['lr']
             }
         )
 
