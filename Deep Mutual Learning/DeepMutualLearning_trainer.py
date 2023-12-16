@@ -15,6 +15,7 @@ from utils.Prints import print_num_trainable_parameters
 from utils.Prints import print_num_parameters
 from utils.Prints import print_data_summary
 from utils.Prints import print_end_of_epoch_summary
+from utils.Prints import print_end_of_epoch_summary_mutual
 from utils.Prints import print_end_of_test_summary
 from data.dataset_synapse import Synapse_dataset
 from torch.utils.data import DataLoader
@@ -471,7 +472,7 @@ def train(
 
         ########################################################################
 
-        print_end_of_epoch_summary(
+        print_end_of_epoch_summary_mutual(
             # general
             args, epoch,
             

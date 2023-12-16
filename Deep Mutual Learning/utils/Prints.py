@@ -98,7 +98,7 @@ def print_end_of_epoch_summary_mutual(
         f"Dice loss   [b][{args.train_batches_color}]{epoch_loss_dice_train_teacher.item():02.6f}[/{args.train_batches_color}][/b] {args.loss_is_best_str if train_dice_is_best_teacher else args.loss_is_not_best_str} | "
         f"Distillation loss [b][{args.train_batches_color}]{epoch_loss_distill_train_teacher.item():02.6f}[/{args.train_batches_color}][/b] {args.loss_is_best_str if train_distill_is_best_teacher else args.loss_is_not_best_str} |"
         f"\n"
-        f"                   | student | "
+        f"            | student | "
         f"Cross-Entropy loss [b][{args.train_batches_color}]{epoch_loss_ce_train_student.item():02.6f}[/{args.train_batches_color}][/b] {args.loss_is_best_str if train_ce_is_best_student else args.loss_is_not_best_str} | "
         f"Dice loss   [b][{args.train_batches_color}]{epoch_loss_dice_train_student.item():02.6f}[/{args.train_batches_color}][/b] {args.loss_is_best_str if train_dice_is_best_student else args.loss_is_not_best_str} | "
         f"Distillation loss [b][{args.train_batches_color}]{epoch_loss_distill_train_student.item():02.6f}[/{args.train_batches_color}][/b] {args.loss_is_best_str if train_distill_is_best_student else args.loss_is_not_best_str} |"
