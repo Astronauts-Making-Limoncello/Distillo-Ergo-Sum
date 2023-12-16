@@ -411,13 +411,15 @@ def train(
             train_loss_is_best_teacher = True
 
         if train_ce_loss_is_best_teacher:
-            save_ckpt(model_student, optimizer_teacher, epoch, args.get_args(), f"{args.checkpoint_dir}/teacher_ckpt_train_best_ce_loss.pth")
+            save_ckpt(model_teacher, optimizer_teacher, epoch, args.get_args(), f"{args.checkpoint_dir}/teacher_ckpt_train_best_ce_loss.pth")
         if train_dice_loss_is_best_teacher:
-            save_ckpt(model_student, optimizer_teacher, epoch, args.get_args(), f"{args.checkpoint_dir}/teacher_ckpt_train_best_dice_loss.pth")
+            save_ckpt(model_teacher, optimizer_teacher, epoch, args.get_args(), f"{args.checkpoint_dir}/teacher_ckpt_train_best_dice_loss.pth")
+        if train_distill_loss_is_best_teacher:
+            save_ckpt(model_teacher, optimizer_teacher, epoch, args.get_args(), f"{args.checkpoint_dir}/teacher_ckpt_train_best_distill_loss.pth")
         if train_loss_is_best_teacher:
-            save_ckpt(model_student, optimizer_teacher, epoch, args.get_args(), f"{args.checkpoint_dir}/teacher_ckpt_train_best_loss.pth")
+            save_ckpt(model_teacher, optimizer_teacher, epoch, args.get_args(), f"{args.checkpoint_dir}/teacher_ckpt_train_best_loss.pth")
         if epoch % args.log_every_n_epochs == 0:
-            save_ckpt(model_student, optimizer_teacher, epoch, args.get_args(), f"{args.checkpoint_dir}/teacher_ckpt_epoch_{epoch}.pth")
+            save_ckpt(model_teacher, optimizer_teacher, epoch, args.get_args(), f"{args.checkpoint_dir}/teacher_ckpt_epoch_{epoch}.pth")
         
         if epoch_loss_ce_train_student < best_epoch_loss_ce_train_student:
             best_epoch_loss_ce_train_student = epoch_loss_ce_train_student
