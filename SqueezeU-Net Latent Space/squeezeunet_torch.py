@@ -83,4 +83,4 @@ class SqueezeUNet(nn.Module):
 
         # Final convolution
         out = self.final_conv(up1)
-        return out
+        return out, x_latent

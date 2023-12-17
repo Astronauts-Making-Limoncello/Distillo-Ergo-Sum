@@ -217,7 +217,7 @@ def _train(
             if args.train_transforms is None:
                 img_batch_train = img_batch_train.unsqueeze(1)
 
-            outputs = model(img_batch_train)
+            outputs, latents = model(img_batch_train)
             # outputs.shape matches TransU-Net's output shape!!!
 
             step_loss_ce_train = ce_loss.forward(outputs, gt_batch_train[:].long())
@@ -386,7 +386,7 @@ def _validate(
             input = torch.from_numpy(slice).unsqueeze(0).unsqueeze(0).float().to(device)
 
             with torch.no_grad():
-                outputs = model(input)
+                outputs, latents = model(input)
 
                 out = torch.argmax(torch.softmax(outputs, dim=1), dim=1).squeeze(0)
                 out = out.cpu().detach().numpy()
