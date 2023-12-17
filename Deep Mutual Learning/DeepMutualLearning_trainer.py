@@ -266,7 +266,7 @@ def train(
         prog_bar.reset(prog_bar_train_batches_task)
         prog_bar.reset(prog_bar_val_batches_task)
         prog_bar.reset(prog_bar_val_slices_task)
-        prog_bar.reset(prog_bar_val_metrics_task)   
+        prog_bar.reset(prog_bar_val_metrics_task)
 
         running_loss_ce_train_teacher = 0
         running_loss_dice_train_teacher = 0
@@ -279,13 +279,13 @@ def train(
         
         train_ce_loss_is_best_teacher = False
         train_dice_loss_is_best_teacher = False
-        train_soft_targets_loss_is_best_teacher = False
+        train_distill_loss_is_best_teacher = False
         train_loss_is_best_teacher = False
         val_dice_is_best_teacher = False
         val_jaccard_is_best_teacher = False
         train_ce_loss_is_best_student = False
         train_dice_loss_is_best_student = False
-        train_soft_targets_loss_is_best_student = False
+        train_distill_loss_is_best_student = False
         train_loss_is_best_student = False
         val_dice_is_best_student = False
         val_jaccard_is_best_student = False
@@ -418,7 +418,7 @@ def train(
             save_ckpt(model_teacher, optimizer_teacher, epoch, args.get_args(), f"{args.checkpoint_dir}/teacher_ckpt_train_best_distill_loss.pth")
         if train_loss_is_best_teacher:
             save_ckpt(model_teacher, optimizer_teacher, epoch, args.get_args(), f"{args.checkpoint_dir}/teacher_ckpt_train_best_loss.pth")
-        if epoch % args.log_every_n_epochs == 0:
+        if epoch % args.log_every_n_epochs_teacher == 0:
             save_ckpt(model_teacher, optimizer_teacher, epoch, args.get_args(), f"{args.checkpoint_dir}/teacher_ckpt_epoch_{epoch}.pth")
         
         if epoch_loss_ce_train_student < best_epoch_loss_ce_train_student:
@@ -442,7 +442,7 @@ def train(
             save_ckpt(model_student, optimizer_student, epoch, args.get_args(), f"{args.checkpoint_dir}/student_ckpt_train_best_distill_loss.pth")
         if train_loss_is_best_student:
             save_ckpt(model_student, optimizer_student, epoch, args.get_args(), f"{args.checkpoint_dir}/student_ckpt_train_best_loss.pth")
-        if epoch % args.log_every_n_epochs == 0:
+        if epoch % args.log_every_n_epochs_student == 0:
             save_ckpt(model_student, optimizer_student, epoch, args.get_args(), f"{args.checkpoint_dir}/student_ckpt_epoch_{epoch}.pth")
         
         ### --- train step --- ###
@@ -454,7 +454,7 @@ def train(
         epoch_metric_dice_val_teacher, epoch_metric_jaccard_val_teacher = _validate(
             "val", epoch, args, device, model_teacher, dl_val, num_batches_val,
             prog_bar, prog_bar_val_batches_task, prog_bar_val_slices_task, prog_bar_val_metrics_task,
-            wb_run
+            wb_run, "teacher"
         )
 
         if epoch_metric_dice_val_teacher > best_epoch_metric_dice_val_teacher:
@@ -473,7 +473,7 @@ def train(
         epoch_metric_dice_val_student, epoch_metric_jaccard_val_student = _validate(
             "val", epoch, args, device, model_student, dl_val, num_batches_val,
             prog_bar, prog_bar_val_batches_task, prog_bar_val_slices_task, prog_bar_val_metrics_task,
-            wb_run
+            wb_run, "student"
         )
 
         if epoch_metric_dice_val_student > best_epoch_metric_dice_val_student:
@@ -534,9 +534,9 @@ def _add_val_prog_bar_tasks(args: args, prog_bar: Progress, num_batches_val: int
     return prog_bar_val_batches_task, prog_bar_val_slices_task, prog_bar_val_metrics_task
 
 def _validate(
-    inference_type: str, epoch: int, args: args, device, student: Module, dl_val: DataLoader, num_batches_val: int,
+    inference_type: str, epoch: int, args: args, device, model: Module, dl_val: DataLoader, num_batches_val: int,
     prog_bar: Progress, prog_bar_val_batches_task, prog_bar_val_slices_task, prog_bar_val_metrics_task,
-    wb_run: Run
+    wb_run: Run, role: str
 ):
     if inference_type not in args.INFERENCE_TYPES:
         raise ValueError(f"{inference_type} is an invalid inference type. Supported values: {args.INFERENCE_TYPES}")
@@ -548,7 +548,11 @@ def _validate(
     running_metric_dice_val    = [0] * args.num_classes_for_metrics
     running_metric_jaccard_val = [0] * args.num_classes_for_metrics
     
-    student.eval()
+    model.eval()
+
+    prog_bar.reset(prog_bar_val_batches_task)
+    prog_bar.reset(prog_bar_val_slices_task)
+    prog_bar.reset(prog_bar_val_metrics_task)   
 
     for batch_val in list(dl_val)[: num_batches_val]:
         img_batch_val = batch_val["image"] 
@@ -574,7 +578,7 @@ def _validate(
             input = torch.from_numpy(slice).unsqueeze(0).unsqueeze(0).float().to(device)
 
             with torch.no_grad():
-                outputs = student(input)
+                outputs = model(input)
 
                 out = torch.argmax(torch.softmax(outputs, dim=1), dim=1).squeeze(0)
                 out = out.cpu().detach().numpy()
@@ -614,9 +618,9 @@ def _validate(
     wb_run.log(
         {
             "epoch": epoch,
-            f"loss/dice/{inference_type}": 1 - epoch_metric_dice_val,
-            f"metric/dice/{inference_type}": epoch_metric_dice_val,
-            f"metric/jaccard/{inference_type}": epoch_metric_jaccard_val
+            f"{role}/loss/dice/{inference_type}": 1 - epoch_metric_dice_val,
+            f"{role}/metric/dice/{inference_type}": epoch_metric_dice_val,
+            f"{role}/metric/jaccard/{inference_type}": epoch_metric_jaccard_val
         }
     )
 
@@ -636,8 +640,8 @@ def _add_test_prog_bar_tasks(args: args, prog_bar: Progress, num_batches_test: i
     return prog_bar_test_batches_task, prog_bar_test_slices_task, prog_bar_test_metrics_task
 
 def _perform_testing(
-    args: args, prog_bar: Progress, device, student: Module, dl_test: DataLoader,
-    wb_run: Run
+    args: args, prog_bar: Progress, device, model: Module, dl_test: DataLoader,
+    wb_run: Run, role: str
 ):
     
     num_batches_test = int(len(dl_test) * args.lim_num_batches_percent_test)
@@ -647,14 +651,14 @@ def _perform_testing(
     prog_bar_test_batches_task, prog_bar_test_slices_task, prog_bar_test_metrics_task = _add_test_prog_bar_tasks(args, prog_bar, num_batches_test)
     
     return _validate(
-        "test", args.num_epochs, args, device, student, dl_test, num_batches_test, 
+        "test", args.num_epochs, args, device, model, dl_test, num_batches_test, 
         prog_bar, prog_bar_test_batches_task, prog_bar_test_slices_task, prog_bar_test_metrics_task,
-        wb_run
+        wb_run, role
     )
 
 def _test(args: args, prog_bar: Progress, device: device, model: Module, dl_test: DataLoader, wb_run: Run, role: str):
     
-    epoch_metric_dice_test, epoch_metric_jaccard_test = _perform_testing(args, prog_bar, device, model, dl_test, wb_run)
+    epoch_metric_dice_test, epoch_metric_jaccard_test = _perform_testing(args, prog_bar, device, model, dl_test, wb_run, role)
     
     print_end_of_test_summary(
         args, role,
