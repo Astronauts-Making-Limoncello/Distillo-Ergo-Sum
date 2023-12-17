@@ -28,10 +28,6 @@ class SqueezeUNet(nn.Module):
         # Bottleneck
         self.bottleneck = FireModule(int(256 / self.channels_shrink_factor), int(64 / self.channels_shrink_factor), int(512 / self.channels_shrink_factor))
 
-        self.enc_to_latent_space = nn.Linear(512*14*14, 2)
-
-        self.latent_space_to_dec = nn.Linear(2, 512*14*14)
-
         # Expansive Path
         self.up4 = FireModule(int(512 / self.channels_shrink_factor) + int(256 / self.channels_shrink_factor), int(48 / self.channels_shrink_factor), int(256 / self.channels_shrink_factor))
         self.up3 = FireModule(int(256 / self.channels_shrink_factor) + int(128 / self.channels_shrink_factor), int(32 / self.channels_shrink_factor), int(128 / self.channels_shrink_factor))
@@ -56,13 +52,7 @@ class SqueezeUNet(nn.Module):
 
         # Bottleneck
         bn = self.bottleneck(x4p)
-
-        bn = torch.flatten(bn, start_dim=1)
-
-        x_latent = self.enc_to_latent_space(bn)
-
-        bn = self.latent_space_to_dec(x_latent)
-        bn = torch.reshape(bn, (x.shape[0], 512, 14, 14))
+        x_latent = bn
 
         # Expansive Path
         up4 = F.interpolate(bn, scale_factor=2, mode='bilinear', align_corners=True)

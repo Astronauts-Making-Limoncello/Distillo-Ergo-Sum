@@ -33,6 +33,7 @@ from utils.Metrics import calculate_jaccard_metric_per_case
 
 from torch.nn import Module
 from torch.nn.modules import CrossEntropyLoss
+from torch.nn.modules import MSELoss
 from utils.DiceLoss import DiceLoss
 
 from models.squeezeunet_torch import SqueezeUNet
@@ -221,6 +222,7 @@ def train(
     prog_bar_val_batches_task, prog_bar_val_slices_task, prog_bar_val_metrics_task = _add_val_prog_bar_tasks(args, prog_bar, num_batches_val)
 
     ce_loss = CrossEntropyLoss()
+    mse_loss = MSELoss()
     dice_loss = DiceLoss(args.num_classes)
 
     teacher.eval()  # Teacher set to evaluation mode
@@ -228,7 +230,7 @@ def train(
 
     best_epoch_loss_ce_train = torch.inf
     best_epoch_loss_dice_train = torch.inf
-    best_epoch_loss_soft_targets_train = torch.inf
+    best_epoch_loss_latent_distance_train = torch.inf
     best_epoch_loss_train = torch.inf
     
     best_epoch_metric_dice_val = 0
@@ -236,7 +238,7 @@ def train(
 
     ### --- epoch --- ###
 
-    for epoch in range(starting_epoch, starting_epoch + args.num_epochs + 1):
+    for epoch in range(starting_epoch, starting_epoch + args.num_epochs):
         ### --- train step --- ###
         
         prog_bar.reset(prog_bar_train_batches_task)
@@ -246,11 +248,12 @@ def train(
 
         running_loss_ce_train = 0
         running_loss_dice_train = 0
-        running_loss_soft_targets = 0
+        running_loss_latent_distance_train = 0
         running_loss_train = 0
+        
         train_ce_loss_is_best = False
         train_dice_loss_is_best = False
-        train_soft_targets_loss_is_best = False
+        train_latent_distance_loss_is_best = False
         train_loss_is_best = False
         val_dice_is_best = False
         val_jaccard_is_best = False
@@ -267,26 +270,18 @@ def train(
             
             student_logits, student_latents = student(img_batch_train)
 
-            #Soften the student logits by applying softmax first and log() second
-            soft_targets = nn.functional.softmax(teacher_logits / args.T, dim=-1)
-            soft_prob = nn.functional.log_softmax(student_logits / args.T, dim=-1)
-
-            # Calculate the soft targets loss. Scaled by T**2 as 
-            # suggested by the authors of the paper "Distilling the knowledge in a neural network"
-            step_loss_soft_targets = -torch.sum(soft_targets * soft_prob) / soft_prob.size()[0] * (args.T**2)
-            # Normalize to have value between 0 and 1, in order to have the same scale as the ther loss components
-            step_loss_soft_targets /= args.soft_target_loss_max_value
-            running_loss_soft_targets += step_loss_soft_targets
-
             step_loss_ce_train = ce_loss.forward(student_logits, gt_batch_train[:].long())
             running_loss_ce_train += step_loss_ce_train
+            
             step_loss_dice_train = dice_loss.forward(student_logits, gt_batch_train, softmax=True)
             running_loss_dice_train += step_loss_dice_train
 
+            step_loss_latent_distance_train = mse_loss.forward(input=student_latents, target=teacher_latents)
+            running_loss_latent_distance_train += step_loss_latent_distance_train
+
             loss_train = (
-                args.alpha * step_loss_ce_train + args.beta * step_loss_dice_train + args.soft_target_loss_weight * step_loss_soft_targets
+                args.alpha * step_loss_ce_train + args.beta * step_loss_dice_train + args.delta * step_loss_latent_distance_train
             )
-            
             running_loss_train += loss_train
 
             loss_train.backward()
@@ -302,7 +297,7 @@ def train(
 
         epoch_loss_ce_train = running_loss_ce_train / num_batches_train
         epoch_loss_dice_train = running_loss_dice_train / num_batches_train
-        epoch_loss_soft_targets_train = running_loss_soft_targets / num_batches_train
+        epoch_loss_latent_distance_train = running_loss_latent_distance_train / num_batches_train
         epoch_loss_train = running_loss_train / num_batches_train
 
         wb_run.log(
@@ -310,7 +305,7 @@ def train(
                 "epoch": epoch,
                 "loss/full/train": epoch_loss_train,
                 "loss/ce/train": epoch_loss_ce_train,
-                "loss/softlogits/train": epoch_loss_soft_targets_train,
+                "loss/latent_distance/train": epoch_loss_latent_distance_train,
                 "loss/dice/train": epoch_loss_dice_train,
                 "lr": optimizer.param_groups[0]['lr']
             }
@@ -322,9 +317,9 @@ def train(
         if epoch_loss_dice_train < best_epoch_loss_dice_train:
             best_epoch_loss_dice_train = epoch_loss_dice_train
             train_dice_loss_is_best = True
-        if epoch_loss_soft_targets_train < best_epoch_loss_soft_targets_train:
-            best_epoch_loss_soft_targets_train = epoch_loss_soft_targets_train
-            train_soft_targets_loss_is_best = True
+        if epoch_loss_latent_distance_train < best_epoch_loss_latent_distance_train:
+            best_epoch_loss_latent_distance_train = epoch_loss_latent_distance_train
+            train_latent_distance_loss_is_best = True
         if epoch_loss_train < best_epoch_loss_train:
             best_epoch_loss_train = epoch_loss_train
             train_loss_is_best = True
@@ -333,6 +328,8 @@ def train(
             save_ckpt(student, optimizer, epoch, args.get_args(), f"{args.checkpoint_dir}/ckpt_train_best_ce_loss.pth")
         if train_dice_loss_is_best:
             save_ckpt(student, optimizer, epoch, args.get_args(), f"{args.checkpoint_dir}/ckpt_train_best_dice_loss.pth")
+        if train_latent_distance_loss_is_best:
+            save_ckpt(student, optimizer, epoch, args.get_args(), f"{args.checkpoint_dir}/ckpt_train_best_latent_distance_loss.pth")
         if train_loss_is_best:
             save_ckpt(student, optimizer, epoch, args.get_args(), f"{args.checkpoint_dir}/ckpt_train_best_loss.pth")
         if epoch % args.log_every_n_epochs == 0:
@@ -373,7 +370,7 @@ def train(
             # train
             epoch_loss_ce_train, train_ce_loss_is_best,
             epoch_loss_dice_train, train_dice_loss_is_best,
-            epoch_loss_soft_targets_train, train_soft_targets_loss_is_best,
+            epoch_loss_latent_distance_train, train_latent_distance_loss_is_best,
             # val
             epoch_metric_jaccard_val, val_jaccard_is_best,
             epoch_metric_dice_val, val_dice_is_best
@@ -534,9 +531,9 @@ def _test(args: args, prog_bar: Progress, device: device, model: Module, dl_test
 
 def main():
 
-    seed = round(time.time())
-    torch.manual_seed(seed)
-    np.random.seed(seed)
+    # seed = round(time.time())
+    # torch.manual_seed(seed)
+    # np.random.seed(seed)
 
     # args
     print(f"Arguments:")

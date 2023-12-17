@@ -368,13 +368,14 @@ class DecoderCup(nn.Module):
         x = hidden_states.permute(0, 2, 1)
         x = x.contiguous().view(B, hidden, h, w)
         x = self.conv_more(x)
+        x_latent = x
         for i, decoder_block in enumerate(self.blocks):
             if features is not None:
                 skip = features[i] if (i < self.config.n_skip) else None
             else:
                 skip = None
             x = decoder_block(x, skip=skip)
-        return x
+        return x, x_latent
 
 
 class VisionTransformer(nn.Module):
@@ -413,13 +414,7 @@ class VisionTransformer(nn.Module):
         
         x, attn_weights, features = self.transformer(x)  # (B, n_patch, hidden)
 
-        x = torch.flatten(x, start_dim=1)
-        x_latent = self.enc_to_latent_space(x)
-        
-        x = self.latent_space_to_dec(x_latent)
-        
-        x = torch.reshape(x, (x.shape[0], 196, 768))
-        x = self.decoder(x, features)
+        x, x_latent = self.decoder(x, features)
         
         logits = self.segmentation_head(x)
         
