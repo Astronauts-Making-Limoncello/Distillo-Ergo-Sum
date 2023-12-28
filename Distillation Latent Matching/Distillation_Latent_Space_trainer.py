@@ -222,7 +222,7 @@ def train(
     prog_bar_val_batches_task, prog_bar_val_slices_task, prog_bar_val_metrics_task = _add_val_prog_bar_tasks(args, prog_bar, num_batches_val)
 
     ce_loss = CrossEntropyLoss()
-    mse_loss = MSELoss()
+    mse_loss = torch.nn.functional.l1_loss
     dice_loss = DiceLoss(args.num_classes)
 
     teacher.eval()  # Teacher set to evaluation mode
@@ -276,7 +276,8 @@ def train(
             step_loss_dice_train = dice_loss.forward(student_logits, gt_batch_train, softmax=True)
             running_loss_dice_train += step_loss_dice_train
 
-            step_loss_latent_distance_train = mse_loss.forward(input=student_latents, target=teacher_latents)
+            step_loss_latent_distance_train = mse_loss(input=student_latents, target=teacher_latents)
+            step_loss_latent_distance_train *= args.loss_latent_distance_scaling_factor
             running_loss_latent_distance_train += step_loss_latent_distance_train
 
             loss_train = (
